@@ -1,4 +1,5 @@
 import * as Speech from 'expo-speech';
+import * as FileSystem from 'expo-file-system/legacy';
 import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
 import { VoiceOption } from '../types';
 
@@ -202,9 +203,32 @@ class TTSService {
     onError?: (error: any) => void
   ): Promise<boolean> {
     try {
-      const audioUrl = `http://${this.serverIp}:${this.serverPort}/tts?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
+      const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+      const audioUrl = `http://${this.serverIp}:${this.serverPort}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
+      const localFile = `${FileSystem.cacheDirectory}tts_${Date.now()}.${ext}`;
 
-      this.activePlayer = createAudioPlayer(audioUrl, { updateInterval: 250 });
+      console.log('[TTS] Fetching audio from server:', audioUrl);
+      const downloadResult = await FileSystem.downloadAsync(audioUrl, localFile);
+
+      if (!downloadResult || downloadResult.status !== 200) {
+        console.log('[TTS] Server returned HTTP', downloadResult?.status);
+        return false;
+      }
+
+      console.log('[TTS] Audio downloaded successfully to:', downloadResult.uri);
+
+      if (setAudioModeAsync) {
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          shouldPlayInBackground: true,
+        });
+      }
+
+      this.activePlayer = createAudioPlayer(downloadResult.uri, { updateInterval: 250 });
+      if (!this.activePlayer) {
+        return false;
+      }
+
       this.isUsingServerAudio = true;
 
       this.activePlayer.addListener('playbackStatusUpdate', (status: any) => {
@@ -217,6 +241,7 @@ class TTSService {
         if (status.didJustFinish) {
           this.cleanUp();
           this.notifyProgress(durMs, durMs, false);
+          FileSystem.deleteAsync(downloadResult.uri, { idempotent: true }).catch(() => {});
           if (onFinish) onFinish();
         }
       });
@@ -224,7 +249,7 @@ class TTSService {
       this.activePlayer.play();
       return true;
     } catch (err) {
-      console.log('[TTS] Server playback failed, falling back to on-device Speech:', err);
+      console.log('[TTS] Server audio failed, falling back to on-device Speech:', err);
       this.isUsingServerAudio = false;
       this.activePlayer = null;
       return false;

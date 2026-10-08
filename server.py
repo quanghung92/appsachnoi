@@ -37,6 +37,8 @@ class TTSHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             parsed = urllib.parse.urlparse(self.path)
+            print(f"[Server] GET {parsed.path}", flush=True)
+
             if parsed.path == "/health":
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -45,7 +47,7 @@ class TTSHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"status":"ok","engine":"kokoro+edge","voices":["kokoro_storyvert","kokoro_diem_trinh","kokoro_hung_thinh","vi-VN-HoaiMyNeural","vi-VN-NamMinhNeural"]}')
                 return
 
-            if parsed.path == "/tts":
+            if parsed.path in ["/tts", "/tts.wav", "/tts.mp3"]:
                 query = urllib.parse.parse_qs(parsed.query)
                 text = query.get("text", [""])[0]
                 voice = query.get("voice", ["kokoro_storyvert"])[0]
