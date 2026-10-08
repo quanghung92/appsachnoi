@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AudioVerse - Phòng Nghe Thử & Tuyển Chọn Giọng Đọc AI (16 Giọng)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --surface: #111827;
+      --surface-elevated: #1a2234;
+      --border: #243048;
+      --primary: #06d6a0;
+      --primary-glow: rgba(6, 214, 160, 0.25);
+      --secondary: #38bdf8;
+      --accent: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 30px 20px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 35px;
+      padding-bottom: 25px;
+      border-bottom: 1px solid var(--border);
+    }
+    .badge-top {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(6, 214, 160, 0.12);
+      border: 1px solid rgba(6, 214, 160, 0.3);
+      color: var(--primary);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 32px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    p.lead {
+      color: var(--text-muted);
+      font-size: 15px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    /* Custom test box */
+    .custom-test-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 20px;
+      margin-bottom: 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    }
+    .custom-test-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .input-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    textarea {
+      flex: 1;
+      min-width: 300px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      padding: 12px 14px;
+      font-size: 14px;
+      resize: vertical;
+      min-height: 60px;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .selection-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      background: var(--surface-elevated);
+      padding: 12px 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .selection-count {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--primary);
+    }
+    .btn-apply {
+      background: var(--primary);
+      color: #0d1b2a;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-apply:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px var(--primary-glow);
+    }
+    /* Grid */
+    .voice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 18px;
+    }
+    .voice-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      transition: all 0.25s ease;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+    .voice-card:hover {
+      border-color: rgba(6, 214, 160, 0.4);
+      transform: translateY(-3px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+    }
+    .voice-card.selected {
+      border-color: var(--primary);
+      background: linear-gradient(180deg, rgba(6, 214, 160, 0.05) 0%, var(--surface) 100%);
+    }
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .voice-title-box {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .voice-avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+    }
+    .avatar-female {
+      background: rgba(244, 63, 94, 0.15);
+      color: #fb7185;
+      border: 1px solid rgba(244, 63, 94, 0.3);
+    }
+    .avatar-male {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+    .voice-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .voice-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+    .tag-kokoro {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+    }
+    .tag-edge {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+    .tag-gender {
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+    }
+    .checkbox-wrap {
+      cursor: pointer;
+    }
+    .checkbox-wrap input {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      accent-color: var(--primary);
+    }
+    .voice-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+      min-height: 40px;
+    }
+    audio {
+      width: 100%;
+      height: 38px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .test-custom-btn {
+      width: 100%;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .test-custom-btn:hover {
+      background: rgba(6, 214, 160, 0.15);
+      color: var(--primary);
+      border-color: var(--primary);
+    }
+    .loading-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-top">🎙️ Phòng Tuyển Chọn Giọng Đọc AI</div>
+      <h1>Nghe Thử Tất Cả 16 Giọng Đọc</h1>
+      <p class="lead">Lắng nghe ngữ điệu thực tế của từng giọng đọc (14 giọng Kokoro Vietnamese Offline + 2 giọng Microsoft Edge). Bạn có thể bấm nghe câu mẫu sẵn có hoặc nhập câu văn tùy ý!</p>
+    </header>
+
+    <!-- Custom test text box -->
+    <div class="custom-test-card">
+      <h3>✍️ Thử nghiệm câu văn tùy ý của bạn:</h3>
+      <div class="input-row">
+        <textarea id="customText" placeholder="Nhập một đoạn truyện hoặc câu nói bất kỳ để nghe AI đọc...">Đêm đã về khuya, gió rít qua khe cửa sổ. Tiếng bước chân khe khẽ vang lên trên hành lang vắng lặng.</textarea>
+      </div>
+    </div>
+
+    <!-- Selection summary -->
+    <div class="selection-summary">
+      <div>
+        <span>Đã chọn: </span>
+        <span class="selection-count" id="selectedCount">0 / 16 giọng</span>
+      </div>
+      <button class="btn-apply" onclick="applySelectionToApp()">Đồng Bộ Các Giọng Đã Chọn Vào App</button>
+    </div>
+
+    <!-- Grid -->
+    <div class="voice-grid" id="voiceGrid">
+      <!-- Injected by JavaScript -->
+    </div>
+
+    <div class="footer">
+      AudioVerse Dual TTS Engine • Kokoro-Vietnamese ONNX 82M & Microsoft Edge Neural
+    </div>
+  </div>
+
+  <script>
+    const VOICES_DATA = [
+      { id: 'kokoro_storyvert', name: 'Storyvert', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_storyvert.wav', desc: 'Giọng đọc đêm khuya thì thầm, truyền cảm, bí ẩn (Cực hợp truyện ma & tiểu thuyết)' },
+      { id: 'kokoro_diem_trinh', name: 'Diễm Trinh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_diem_trinh.wav', desc: 'Giọng nữ trong trẻo, nhẹ nhàng, thanh thoát (Hợp tản văn & sách phát triển bản thân)' },
+      { id: 'kokoro_hung_thinh', name: 'Hưng Thịnh', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_hung_thinh.wav', desc: 'Giọng nam trầm ấm, hào hùng, đĩnh đạc (Hợp truyện kiếm hiệp & lịch sử)' },
+      { id: 'kokoro_mai_linh', name: 'Mai Linh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_mai_linh.wav', desc: 'Giọng nữ trẻ trung, hoạt bát, ngữ điệu vui tươi và tự nhiên' },
+      { id: 'kokoro_mai_loan', name: 'Mai Loan', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_mai_loan.wav', desc: 'Giọng nữ đằm thắm, chững chạc, giàu cảm xúc lắng đọng' },
+      { id: 'kokoro_manh_dung', name: 'Mạnh Dũng', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_manh_dung.wav', desc: 'Giọng nam mạnh mẽ, dứt khoát, khí phách kiên cường' },
+      { id: 'kokoro_my_yen', name: 'Mỹ Yến', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_my_yen.wav', desc: 'Giọng nữ ngọt ngào, ấm áp, truyền cảm hứng dịu dàng' },
+      { id: 'kokoro_ngoc_huyen', name: 'Ngọc Huyền', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_ngoc_huyen.wav', desc: 'Giọng nữ thanh lịch, phát âm chuẩn mực, rõ ràng từng âm tiết' },
+      { id: 'kokoro_phat_tai', name: 'Phát Tài', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_phat_tai.wav', desc: 'Giọng nam dày dặn, sang sảng, ấm áp và gần gũi' },
+      { id: 'kokoro_thanh_dat', name: 'Thành Đạt', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_thanh_dat.wav', desc: 'Giọng nam thanh niên hiện đại, đĩnh đạc, rõ ràng' },
+      { id: 'kokoro_thuc_trinh', name: 'Thục Trinh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_thuc_trinh.wav', desc: 'Giọng nữ đoan trang, dịu nhẹ, âm sắc êm tai khi nghe lâu' },
+      { id: 'kokoro_tuan_ngoc', name: 'Tuấn Ngọc', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_tuan_ngoc.wav', desc: 'Giọng nam truyền cảm, phong thái quý ông trầm ấm' },
+      { id: 'kokoro_duc_an', name: 'Đức An', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_duc_an.wav', desc: 'Giọng nam bình dị, mộc mạc, gần gũi như người kể chuyện' },
+      { id: 'kokoro_duc_duy', name: 'Đức Duy', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_duc_duy.wav', desc: 'Giọng nam dõng dạc, nội lực tốt, tốc độ đọc vừa phải' },
+      { id: 'vi-VN-HoaiMyNeural', name: 'Hoài My', gender: 'Nữ', engine: 'edge', sampleFile: 'edge_hoai_my.mp3', desc: 'Phát thanh viên nữ Microsoft Edge, luyến láy chuẩn phòng thu' },
+      { id: 'vi-VN-NamMinhNeural', name: 'Nam Minh', gender: 'Nam', engine: 'edge', sampleFile: 'edge_nam_minh.mp3', desc: 'Phát thanh viên nam Microsoft Edge, đĩnh đạc, chuyên nghiệp' }
+    ];
+
+    let selectedVoices = new Set(['kokoro_storyvert', 'kokoro_diem_trinh', 'kokoro_hung_thinh', 'vi-VN-HoaiMyNeural', 'vi-VN-NamMinhNeural']);
+
+    function renderGrid() {
+      const grid = document.getElementById('voiceGrid');
+      grid.innerHTML = VOICES_DATA.map(v => {
+        const isSelected = selectedVoices.has(v.id);
+        const avatarClass = v.gender === 'Nữ' ? 'avatar-female' : 'avatar-male';
+        const avatarLetter = v.name[0];
+        const tagEngineClass = v.engine === 'kokoro' ? 'tag-kokoro' : 'tag-edge';
+        const tagEngineLabel = v.engine === 'kokoro' ? 'Kokoro AI' : 'Edge Cloud';
+
+        return `
+          <div class="voice-card ${isSelected ? 'selected' : ''}" id="card_${v.id}">
+            <div>
+              <div class="card-top">
+                <div class="voice-title-box">
+                  <div class="voice-avatar ${avatarClass}">${avatarLetter}</div>
+                  <div>
+                    <div class="voice-name">${v.name}</div>
+                    <div class="voice-meta">
+                      <span class="tag ${tagEngineClass}">${tagEngineLabel}</span>
+                      <span class="tag tag-gender">${v.gender}</span>
+                    </div>
+                  </div>
+                </div>
+                <label class="checkbox-wrap" title="Chọn đưa vào app">
+                  <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelect('${v.id}')">
+                </label>
+              </div>
+              <div class="voice-desc">${v.desc}</div>
+            </div>
+
+            <div>
+              <audio id="audio_${v.id}" controls preload="none">
+                <source src="/samples/${v.sampleFile}" type="${v.sampleFile.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg'}">
+                Trình duyệt không hỗ trợ audio tag.
+              </audio>
+              <button class="test-custom-btn" id="btn_custom_${v.id}" onclick="testCustomText('${v.id}')">
+                <span>🔊</span> Đọc câu tùy ý ở trên bằng giọng này
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      updateCount();
+    }
+
+    function toggleSelect(id) {
+      if (selectedVoices.has(id)) {
+        selectedVoices.delete(id);
+      } else {
+        selectedVoices.add(id);
+      }
+      const card = document.getElementById('card_' + id);
+      if (card) {
+        if (selectedVoices.has(id)) {
+          card.classList.add('selected');
+        } else {
+          card.classList.remove('selected');
+        }
+      }
+      updateCount();
+    }
+
+    function updateCount() {
+      document.getElementById('selectedCount').innerText = `${selectedVoices.size} / ${VOICES_DATA.length} giọng`;
+    }
+
+    async function testCustomText(voiceId) {
+      const text = document.getElementById('customText').value.trim();
+      if (!text) {
+        alert('Vui lòng nhập văn bản vào ô ở trên trước!');
+        return;
+      }
+
+      const btn = document.getElementById('btn_custom_' + voiceId);
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<span class="loading-spinner"></span> Đang tạo giọng đọc...';
+      btn.disabled = true;
+
+      try {
+        const audioUrl = `/tts?text=${encodeURIComponent(text)}&voice=${voiceId}&speed=1.0`;
+        const audio = new Audio(audioUrl);
+        await audio.play();
+      } catch (e) {
+        alert('Lỗi tạo giọng đọc: ' + e.message);
+      } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      }
+    }
+
+    async function applySelectionToApp() {
+      const selectedList = Array.from(selectedVoices);
+      if (selectedList.length === 0) {
+        alert('Vui lòng chọn ít nhất 1 giọng đọc!');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/save-selected-voices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voices: selectedList })
+        });
+        if (res.ok) {
+          alert(`✅ Đã lưu thành công ${selectedList.length} giọng được chọn vào cấu hình App!`);
+        } else {
+          alert('Đã sao chép danh sách mã giọng: ' + selectedList.join(', '));
+        }
+      } catch (e) {
+        alert('Đã chọn ' + selectedList.length + ' giọng. Mã: ' + selectedList.join(', '));
+      }
+    }
+
+    renderGrid();
+  </script>
+</body>
+</html>

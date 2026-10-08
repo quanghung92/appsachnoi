@@ -23,6 +23,9 @@ def get_kokoro_model(voice_id: str):
         kokoro_instances[voice_id] = KokoroVietnameseONNX(voice=voice_id, device="cpu")
     return kokoro_instances[voice_id]
 
+SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "audio_samples")
+AUDITION_HTML = os.path.join(os.path.dirname(__file__), "audition.html")
+
 class TTSHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -38,6 +41,37 @@ class TTSHandler(BaseHTTPRequestHandler):
         try:
             parsed = urllib.parse.urlparse(self.path)
             print(f"[Server] GET {parsed.path}", flush=True)
+
+            if parsed.path in ["/", "/test", "/audition"]:
+                if os.path.exists(AUDITION_HTML):
+                    with open(AUDITION_HTML, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+
+            if parsed.path.startswith("/samples/"):
+                filename = urllib.parse.unquote(parsed.path.replace("/samples/", ""))
+                sample_file = os.path.join(SAMPLES_DIR, filename)
+                if os.path.exists(sample_file):
+                    content_type = "audio/wav" if filename.endswith(".wav") else "audio/mpeg"
+                    with open(sample_file, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
 
             if parsed.path == "/health":
                 self.send_response(200)
@@ -76,6 +110,22 @@ class TTSHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/save-selected-voices":
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_body = self.rfile.read(content_length).decode('utf-8')
+                import json
+                data = json.loads(post_body)
+                voices = data.get("voices", [])
+                selected_path = os.path.join(os.path.dirname(__file__), "selected_voices.json")
+                with open(selected_path, "w", encoding="utf-8") as f:
+                    json.dump(voices, f, ensure_ascii=False, indent=2)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+                return
+
             if parsed.path == "/tts":
                 content_length = int(self.headers.get('Content-Length', 0))
                 post_body = self.rfile.read(content_length).decode('utf-8')
