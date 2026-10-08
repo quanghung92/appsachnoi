@@ -51,6 +51,21 @@ type ProgressListener = (progress: {
   durationMs: number;
 }) => void;
 
+import { NativeModules } from 'react-native';
+
+const getDetectedHostIp = (): string => {
+  try {
+    const scriptURL = (NativeModules.SourceCode as any)?.scriptURL;
+    if (scriptURL) {
+      const match = scriptURL.match(/^https?:\/\/([^:\/]+)/);
+      if (match && match[1] && match[1] !== 'localhost' && match[1] !== '127.0.0.1') {
+        return match[1];
+      }
+    }
+  } catch (e) {}
+  return '192.168.110.172';
+};
+
 class TTSService {
   private currentVoice: VoiceOption = VIETNAMESE_VOICES[0]; // Default to Storyvert
   private currentSpeed: number = 1.0;
@@ -60,7 +75,7 @@ class TTSService {
   private progressInterval: any = null;
   private estimatedDurationMs: number = 10000;
   private elapsedMs: number = 0;
-  private serverIp: string = '192.168.110.172';
+  private serverIp: string = getDetectedHostIp();
   private serverPort: number = 3000;
   private activePlayer: AudioPlayer | null = null;
   private isUsingServerAudio: boolean = false;
@@ -107,34 +122,43 @@ class TTSService {
   }
 
   public setServerIp(ip: string) {
-    this.serverIp = ip.trim();
+    let clean = ip.trim();
+    clean = clean.replace(/^https?:\/\//, '').replace(/:3000.*$/, '').replace(/\/.*$/, '');
+    this.serverIp = clean;
   }
 
   public async testServerConnection(): Promise<{ success: boolean; ip: string; message: string }> {
-    try {
-      const url = `http://${this.serverIp}:${this.serverPort}/health`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+    // Try current IP first, then fallback to 192.168.110.172 if different
+    const candidateIps = Array.from(new Set([this.serverIp, '192.168.110.172', getDetectedHostIp()]));
 
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
+    for (const ip of candidateIps) {
+      try {
+        const url = `http://${ip}:${this.serverPort}/health`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
 
-      if (res.ok) {
-        const data = await res.json();
-        return {
-          success: true,
-          ip: this.serverIp,
-          message: `Kết nối thành công! Động cơ: ${data.engine || 'Kokoro + Edge'}`
-        };
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          this.serverIp = ip; // Auto-update to working IP
+          return {
+            success: true,
+            ip: this.serverIp,
+            message: `Kết nối thành công! (${data.engine || 'Kokoro'})`
+          };
+        }
+      } catch (e: any) {
+        // try next candidate
       }
-      return { success: false, ip: this.serverIp, message: `Server báo lỗi: HTTP ${res.status}` };
-    } catch (e: any) {
-      return {
-        success: false,
-        ip: this.serverIp,
-        message: `Chưa kết nối được (${e?.message || 'timeout'})`
-      };
     }
+
+    return {
+      success: false,
+      ip: this.serverIp,
+      message: 'Không tìm thấy server trên mạng Wi-Fi'
+    };
   }
 
   public addProgressListener(listener: ProgressListener) {

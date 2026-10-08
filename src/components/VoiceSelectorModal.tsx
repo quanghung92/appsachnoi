@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
 import { VoiceOption } from '../types';
@@ -30,6 +30,9 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
     message: '',
   });
 
+  const [isEditingIp, setIsEditingIp] = useState(false);
+  const [customIp, setCustomIp] = useState(ttsService.getServerIp());
+
   const checkConnection = async () => {
     setServerStatus(prev => ({ ...prev, checking: true }));
     const result = await ttsService.testServerConnection();
@@ -38,6 +41,15 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
       connected: result.success,
       message: result.message,
     });
+    setCustomIp(ttsService.getServerIp());
+  };
+
+  const handleSaveIp = async () => {
+    if (customIp.trim()) {
+      ttsService.setServerIp(customIp);
+    }
+    setIsEditingIp(false);
+    await checkConnection();
   };
 
   useEffect(() => {
@@ -75,20 +87,44 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                     ? 'Đang kiểm tra máy chủ AI...'
                     : serverStatus.connected
                     ? `Kokoro AI Server: Sẵn sàng (${ttsService.getServerIp()}:3000)`
-                    : 'Kokoro AI Server: Chưa kết nối máy tính'}
+                    : `Kokoro AI: Chưa kết nối (${ttsService.getServerIp()}:3000)`}
                 </Text>
                 <Text style={styles.serverBannerSubtitle}>
                   {serverStatus.connected
                     ? 'Đang phát trực tiếp bằng Kokoro ONNX CPU siêu nhanh'
-                    : 'Đang dùng giọng đọc thiết bị dự phòng (Wi-Fi cùng mạng để mở Kokoro)'}
+                    : 'Hãy đảm bảo điện thoại bắt cùng Wi-Fi với máy tính (không bật 4G)'}
                 </Text>
               </View>
             </View>
-            <TouchableOpacity onPress={checkConnection} style={styles.refreshBtn} activeOpacity={0.7}>
-              <Ionicons name="refresh" size={15} color={Colors.primary} />
-              <Text style={styles.refreshBtnText}>Thử lại</Text>
-            </TouchableOpacity>
+
+            <View style={styles.bannerActions}>
+              <TouchableOpacity onPress={() => setIsEditingIp(!isEditingIp)} style={styles.editIpBtn} activeOpacity={0.7}>
+                <Ionicons name="pencil" size={13} color={Colors.textLight} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={checkConnection} style={styles.refreshBtn} activeOpacity={0.7}>
+                <Ionicons name="refresh" size={14} color={Colors.primary} />
+                <Text style={styles.refreshBtnText}>Thử lại</Text>
+              </TouchableOpacity>
+            </View>
           </View>
+
+          {/* Inline IP Editor */}
+          {isEditingIp && (
+            <View style={styles.ipEditorContainer}>
+              <TextInput
+                style={styles.ipInput}
+                value={customIp}
+                onChangeText={setCustomIp}
+                placeholder="Nhập IP máy tính (vd: 192.168.110.172)"
+                placeholderTextColor={Colors.textMuted}
+                autoCapitalize="none"
+                keyboardType="numeric"
+              />
+              <TouchableOpacity onPress={handleSaveIp} style={styles.saveIpBtn}>
+                <Text style={styles.saveIpText}>Lưu & Thử</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* Voice List */}
           <View style={styles.list}>
@@ -247,6 +283,47 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: Colors.textMuted,
     marginTop: 1,
+  },
+  bannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  editIpBtn: {
+    padding: 6,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  ipEditorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 12,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  ipInput: {
+    flex: 1,
+    color: Colors.textPrimary,
+    fontSize: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  saveIpBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  saveIpText: {
+    color: '#0d1b2a',
+    fontSize: 11,
+    fontWeight: '700',
   },
   refreshBtn: {
     flexDirection: 'row',
