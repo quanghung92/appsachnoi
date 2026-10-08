@@ -1,9 +1,9 @@
-import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
 import { VoiceOption } from '../types';
-import { VIETNAMESE_VOICES } from '../services/ttsService';
+import { VIETNAMESE_VOICES, ttsService } from '../services/ttsService';
 
 interface VoiceSelectorModalProps {
   visible: boolean;
@@ -20,23 +20,82 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
   onSelectVoice,
   onTestVoice,
 }) => {
+  const [serverStatus, setServerStatus] = useState<{
+    checking: boolean;
+    connected: boolean;
+    message: string;
+  }>({
+    checking: false,
+    connected: false,
+    message: '',
+  });
+
+  const checkConnection = async () => {
+    setServerStatus(prev => ({ ...prev, checking: true }));
+    const result = await ttsService.testServerConnection();
+    setServerStatus({
+      checking: false,
+      connected: result.success,
+      message: result.message,
+    });
+  };
+
+  useEffect(() => {
+    if (visible) {
+      checkConnection();
+    }
+  }, [visible]);
+
   return (
     <Modal visible={visible} animationType="fade" transparent>
       <View style={styles.overlay}>
         <View style={styles.card}>
+          {/* Header */}
           <View style={styles.header}>
             <View>
-              <Text style={styles.title}>Giọng Đọc AI Microsoft Edge</Text>
-              <Text style={styles.subtitle}>Chất lượng phòng thu, phát thanh tự nhiên 100%</Text>
+              <Text style={styles.title}>Giọng Đọc AI Kokoro & Edge</Text>
+              <Text style={styles.subtitle}>Mô hình AI đọc tiểu thuyết truyền cảm, tự nhiên</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Ionicons name="close" size={22} color={Colors.textPrimary} />
             </TouchableOpacity>
           </View>
 
+          {/* Server Connection Status Banner */}
+          <View style={[styles.serverBanner, serverStatus.connected ? styles.serverBannerOk : styles.serverBannerWarn]}>
+            <View style={styles.serverBannerLeft}>
+              {serverStatus.checking ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <View style={[styles.statusDot, serverStatus.connected ? styles.dotGreen : styles.dotOrange]} />
+              )}
+              <View style={styles.serverBannerTextCol}>
+                <Text style={styles.serverBannerTitle}>
+                  {serverStatus.checking
+                    ? 'Đang kiểm tra máy chủ AI...'
+                    : serverStatus.connected
+                    ? `Kokoro AI Server: Sẵn sàng (${ttsService.getServerIp()}:3000)`
+                    : 'Kokoro AI Server: Chưa kết nối máy tính'}
+                </Text>
+                <Text style={styles.serverBannerSubtitle}>
+                  {serverStatus.connected
+                    ? 'Đang phát trực tiếp bằng Kokoro ONNX CPU siêu nhanh'
+                    : 'Đang dùng giọng đọc thiết bị dự phòng (Wi-Fi cùng mạng để mở Kokoro)'}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={checkConnection} style={styles.refreshBtn} activeOpacity={0.7}>
+              <Ionicons name="refresh" size={15} color={Colors.primary} />
+              <Text style={styles.refreshBtnText}>Thử lại</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Voice List */}
           <View style={styles.list}>
             {VIETNAMESE_VOICES.map((voice) => {
               const isSelected = selectedVoice.id === voice.id;
+              const isKokoro = voice.id.startsWith('kokoro_');
+
               return (
                 <TouchableOpacity
                   key={voice.id}
@@ -51,10 +110,15 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                     <View style={styles.voiceTitleRow}>
                       <Ionicons
                         name={voice.gender === 'female' ? 'woman' : 'man'}
-                        size={18}
+                        size={17}
                         color={voice.gender === 'female' ? Colors.secondary : Colors.primary}
                       />
                       <Text style={styles.voiceName}>{voice.name}</Text>
+                      <View style={[styles.tagBadge, isKokoro ? styles.tagKokoro : styles.tagEdge]}>
+                        <Text style={[styles.tagBadgeText, isKokoro ? styles.tagKokoroText : styles.tagEdgeText]}>
+                          {isKokoro ? 'Kokoro AI' : 'Edge'}
+                        </Text>
+                      </View>
                       {isSelected && (
                         <View style={styles.currentBadge}>
                           <Text style={styles.currentBadgeText}>Đang dùng</Text>
@@ -72,7 +136,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                     }}
                     accessibilityLabel="Nghe thử giọng"
                   >
-                    <Ionicons name="volume-medium" size={18} color={Colors.textLight} />
+                    <Ionicons name="volume-medium" size={16} color={Colors.textLight} />
                     <Text style={styles.testBtnText}>Thử giọng</Text>
                   </TouchableOpacity>
                 </TouchableOpacity>
@@ -80,10 +144,11 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
             })}
           </View>
 
+          {/* Footer Notice */}
           <View style={styles.footerNotice}>
-            <Ionicons name="checkmark-circle" size={16} color={Colors.primary} />
+            <Ionicons name="sparkles" size={15} color={Colors.primary} />
             <Text style={styles.noticeText}>
-              Hoàn toàn miễn phí, không giới hạn số từ và không cần API key.
+              Kokoro 82M chạy trên PC/Server với độ trễ thấp &amp; tự động dự phòng nếu mất mạng.
             </Text>
           </View>
         </View>
@@ -95,13 +160,14 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 18,
   },
   card: {
     width: '100%',
+    maxHeight: '90%',
     backgroundColor: Colors.surface,
     borderRadius: 24,
     padding: 20,
@@ -117,7 +183,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 18,
+    marginBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     paddingBottom: 12,
@@ -135,16 +201,79 @@ const styles = StyleSheet.create({
   closeBtn: {
     padding: 4,
   },
+  serverBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+  },
+  serverBannerOk: {
+    backgroundColor: 'rgba(6, 214, 160, 0.08)',
+    borderColor: 'rgba(6, 214, 160, 0.25)',
+  },
+  serverBannerWarn: {
+    backgroundColor: 'rgba(255, 183, 3, 0.08)',
+    borderColor: 'rgba(255, 183, 3, 0.25)',
+  },
+  serverBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dotGreen: {
+    backgroundColor: '#06d6a0',
+  },
+  dotOrange: {
+    backgroundColor: '#ffb703',
+  },
+  serverBannerTextCol: {
+    flex: 1,
+  },
+  serverBannerTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  serverBannerSubtitle: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  refreshBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: Colors.surfaceElevated,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  refreshBtnText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
   list: {
-    gap: 12,
+    gap: 10,
   },
   voiceItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: Colors.surfaceElevated,
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: Colors.border,
   },
@@ -154,17 +283,43 @@ const styles = StyleSheet.create({
   },
   voiceInfo: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 8,
   },
   voiceTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexWrap: 'wrap',
   },
   voiceName: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: Colors.textPrimary,
+  },
+  tagBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  tagBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  tagKokoro: {
+    backgroundColor: 'rgba(17, 138, 178, 0.2)',
+  },
+  tagKokoroText: {
+    color: '#38bdf8',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  tagEdge: {
+    backgroundColor: 'rgba(255, 209, 102, 0.15)',
+  },
+  tagEdgeText: {
+    color: '#fbbf24',
+    fontSize: 9,
+    fontWeight: '700',
   },
   currentBadge: {
     backgroundColor: 'rgba(6, 214, 160, 0.2)',
@@ -174,23 +329,23 @@ const styles = StyleSheet.create({
   },
   currentBadgeText: {
     color: Colors.primary,
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
   },
   voiceDesc: {
     fontSize: 11,
     color: Colors.textSecondary,
-    marginTop: 4,
-    lineHeight: 16,
+    marginTop: 3,
+    lineHeight: 15,
   },
   testBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
     backgroundColor: Colors.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: Colors.borderLight,
   },
@@ -203,13 +358,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 18,
-    paddingTop: 12,
+    marginTop: 14,
+    paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
   noticeText: {
-    fontSize: 11,
+    fontSize: 10.5,
     color: Colors.textMuted,
     flex: 1,
   },
