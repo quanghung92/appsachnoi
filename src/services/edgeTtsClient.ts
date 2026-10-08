@@ -72,12 +72,86 @@ function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+interface SentenceProsody {
+  pitch: string;
+  rate: string;
+  contour?: string;
+  emphasis: boolean;
+}
+
+/**
+ * Nhận diện loại câu để gán ngữ điệu:
+ * - Câu hỏi (?)      -> giọng lên cao ở cuối câu (rising intonation)
+ * - Câu cảm thán (!)  -> cao giọng + nhấn mạnh
+ * - Câu kể (.)        -> giữ tự nhiên
+ */
+function analyzeSentence(sentence: string): SentenceProsody {
+  const t = sentence.trim();
+  if (t.endsWith('?')) {
+    return {
+      pitch: '+8%',
+      rate: '+0%',
+      contour: '(0%,+0Hz)(60%,+0Hz)(100%,+18Hz)',
+      emphasis: false,
+    };
+  }
+  if (t.endsWith('!')) {
+    return { pitch: '+10%', rate: '+5%', emphasis: true };
+  }
+  return { pitch: '+0%', rate: '+0%', emphasis: false };
+}
+
+/** Bọc hội thoại trong ngoặc kép bằng <emphasis> để phân biệt lời thoại. */
+function emphasizeDialogue(escapedText: string): string {
+  return escapedText.replace(
+    /&quot;(.+?)&quot;/g,
+    '<emphasis level="moderate">&quot;$1&quot;</emphasis>'
+  );
+}
+
+/**
+ * Tách câu nhưng KHÔNG cắt ngang hội thoại trong ngoặc kép
+ * (nếu không, câu thoại bị xẻ đôi và mất nhấn giọng).
+ */
+function splitSentences(text: string): string[] {
+  const segments = text.split(/("[^"]*")/g);
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (!seg.trim()) continue;
+    if (/^"[^"]*"$/.test(seg.trim())) {
+      out.push(seg.trim());
+    } else {
+      const parts = seg.match(/[^.!?…\n]+[.!?…\n]+|[^.!?…\n]+$/g) || [seg];
+      for (const p of parts) {
+        if (p.trim()) out.push(p.trim());
+      }
+    }
+  }
+  return out;
+}
+
 export function buildSsml(text: string, voice: string): string {
+  const sentences = splitSentences(text);
+  const parts: string[] = [];
+  for (const s of sentences) {
+    const t = s.trim();
+    if (!t) continue;
+    const p = analyzeSentence(t);
+    let inner = emphasizeDialogue(escapeXml(t));
+    if (p.emphasis) {
+      inner = `<emphasis level="strong">${inner}</emphasis>`;
+    }
+    let open = `<prosody pitch='${p.pitch}' rate='${p.rate}' volume='+0%'`;
+    if (p.contour) {
+      open += ` contour='${p.contour}'`;
+    }
+    parts.push(`${open}>${inner}</prosody>`);
+  }
+  // Ngắt nghỉ rõ ràng giữa các câu để đỡ "bình bình"
+  const body = parts.join('<break strength="medium"/>');
   return (
     `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>` +
-    `<voice name='${voice}'>` +
-    `<prosody pitch='+0Hz' rate='+0%' volume='+0%'>${escapeXml(text)}</prosody>` +
-    `</voice></speak>`
+    `<voice name='${voice}'>${body}</voice></speak>`
   );
 }
 
