@@ -313,16 +313,23 @@ class TTSService {
 
   // ---------- Nội bộ: Edge-TTS ----------
 
-  private cacheDir(): string {
-    return `${FileSystem.cacheDirectory}edge_tts/`;
+  private cacheDir(): string | null {
+    // Trên web expo-file-system không có cacheDirectory -> trả null
+    // để engine tự rớt về giọng hệ thống thay vì crash.
+    const base = FileSystem.cacheDirectory;
+    return base ? `${base}edge_tts/` : null;
   }
 
   private async ensureChunkAudio(i: number, gen: number): Promise<string> {
     const hit = this.chunkUris[i];
     if (hit) return hit;
 
+    const dir = this.cacheDir();
+    if (!dir) {
+      throw new Error('Thiết bị không hỗ trợ cache file audio');
+    }
     const key = await sha256Hex(`${this.currentVoice.id}::${this.chunks[i]}`);
-    const uri = `${this.cacheDir()}${key}.mp3`;
+    const uri = `${dir}${key}.mp3`;
     const info = await FileSystem.getInfoAsync(uri);
     if (info.exists) {
       this.chunkUris[i] = uri;
@@ -334,7 +341,7 @@ class TTSService {
       throw new Error('stale generation');
     }
     try {
-      await FileSystem.makeDirectoryAsync(this.cacheDir(), {
+      await FileSystem.makeDirectoryAsync(dir, {
         intermediates: true,
       });
     } catch {
