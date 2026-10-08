@@ -85,7 +85,7 @@ export default function App() {
       setCurrentBook(bookToPlay);
       const firstChapter = bookToPlay.chapters[0];
       setCurrentChapter(firstChapter);
-      await startReading(firstChapter.content);
+      await startReading(firstChapter.content, bookToPlay, firstChapter);
       addToRecent(bookToPlay);
       return;
     }
@@ -94,15 +94,22 @@ export default function App() {
     if (isPlaying) {
       await ttsService.pause();
       setIsPlaying(false);
+    } else if (ttsService.isPausedState()) {
+      // Đang pause -> tiếp tục từ chỗ dừng (không đọc lại từ đầu)
+      await ttsService.resume();
+      setIsPlaying(true);
     } else {
       if (currentChapter) {
-        await startReading(currentChapter.content);
+        await startReading(currentChapter.content, bookToPlay, currentChapter);
       }
     }
   };
 
-  const startReading = async (text: string) => {
+  const startReading = async (text: string, book?: Book, chapter?: Chapter) => {
     setIsPlaying(true);
+    if (book) {
+      ttsService.setNowPlaying(book.title, chapter?.title || book.author);
+    }
     await ttsService.speak(
       text,
       // onFinish: Auto-advance to next chapter!
@@ -126,7 +133,9 @@ export default function App() {
 
   const handleSelectChapter = (chapter: Chapter) => {
     setCurrentChapter(chapter);
-    startReading(chapter.content);
+    if (currentBook) {
+      startReading(chapter.content, currentBook, chapter);
+    }
   };
 
   const handleNextChapter = () => {
@@ -135,7 +144,7 @@ export default function App() {
     if (currentIndex >= 0 && currentIndex < currentBook.chapters.length - 1) {
       const next = currentBook.chapters[currentIndex + 1];
       setCurrentChapter(next);
-      startReading(next.content);
+      startReading(next.content, currentBook, next);
     } else {
       // Reached the end
       ttsService.stop();
@@ -149,12 +158,18 @@ export default function App() {
     if (currentIndex > 0) {
       const prev = currentBook.chapters[currentIndex - 1];
       setCurrentChapter(prev);
-      startReading(prev.content);
+      startReading(prev.content, currentBook, prev);
     }
   };
 
-  const handleSeek = (ms: number) => {
+  const handleSeek = async (ms: number) => {
+    // Tua thật trên audio đang phát (engine Edge-TTS)
     setPositionMs(ms);
+    try {
+      await ttsService.seekTo(ms);
+    } catch {
+      /* engine giọng hệ thống không hỗ trợ tua */
+    }
   };
 
   const handleChangeSpeed = () => {
@@ -203,7 +218,7 @@ export default function App() {
       setCurrentBook(newBook);
       const chapter = newBook.chapters[0];
       setCurrentChapter(chapter);
-      startReading(chapter.content);
+      startReading(chapter.content, newBook, chapter);
       setIsFullPlayerVisible(true);
     }
   };

@@ -6,8 +6,12 @@
     "@expo/vector-icons": "^15.0.2",
     "@react-native-community/slider": "5.2.0",
     "expo": "~57.0.27",
+    "expo-asset": "~57.0.19",
     "expo-audio": "~57.0.5",
+    "expo-crypto": "~57.0.3",
     "expo-document-picker": "~57.0.3",
+    "expo-file-system": "~57.0.7",
+    "expo-font": "~57.0.4",
     "expo-haptics": "~57.0.3",
     "expo-linear-gradient": "~57.0.2",
     "expo-speech": "~57.0.3",
@@ -22,7 +26,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "cross-env REACT_NATIVE_PACKAGER_HOSTNAME=192.168.110.172 expo start",
+    "start": "expo start",
     "start:default": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",

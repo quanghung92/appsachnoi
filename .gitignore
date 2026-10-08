@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Edge-TTS server cache (local only)
+audio_cache/
