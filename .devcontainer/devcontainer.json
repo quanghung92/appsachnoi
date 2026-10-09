@@ -1,0 +1,1 @@
+{"customizations":{"vscode":{"extensions":[]}},"image":"mcr.microsoft.com/devcontainers/python:3.11","name":"AudioVerse TTS Server","portsAttributes":{"3000":{"label":"AudioVerse TTS Server","onAutoForward":"notify","visibility":"public"}},"postCreateCommand":"pip install -r requirements-server.txt"}
