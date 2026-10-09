@@ -13,6 +13,7 @@ import { Book, Chapter } from '../types';
 import { BookCard } from '../components/BookCard';
 import { NovelCard } from '../components/NovelCard';
 import { CategoryPills } from '../components/CategoryPills';
+import { ReadingProgress } from '../services/storageService';
 
 interface HomeScreenProps {
   books: Book[];
@@ -20,10 +21,12 @@ interface HomeScreenProps {
   currentBook: Book | null;
   isPlaying: boolean;
   selectedCategory: string;
+  lastProgress: ReadingProgress | null;
   onSelectCategory: (category: string) => void;
   onSelectBook: (book: Book, chapter?: Chapter) => void;
   onTogglePlay: (book: Book) => void;
   onOpenImportModal: () => void;
+  onResume: () => void;
 }
 
 const CATEGORIES = [
@@ -44,10 +47,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   currentBook,
   isPlaying,
   selectedCategory,
+  lastProgress,
   onSelectCategory,
   onSelectBook,
   onTogglePlay,
   onOpenImportModal,
+  onResume,
 }) => {
   const featuredBook = books[0] || novels[0];
 
@@ -59,8 +64,38 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     selectedCategory === 'Tất Cả' ? true : n.category.includes(selectedCategory)
   );
 
+  const resumePercent =
+    lastProgress && lastProgress.totalSentences > 0
+      ? Math.round((lastProgress.sentenceIndex / lastProgress.totalSentences) * 100)
+      : 0;
+
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Tiếp tục nghe (ghi nhớ tiến độ) */}
+      {lastProgress && (
+        <TouchableOpacity
+          style={styles.resumeCard}
+          onPress={onResume}
+          activeOpacity={0.9}
+        >
+          <View style={styles.resumeIconBox}>
+            <Ionicons name="play-circle" size={40} color={Colors.primary} />
+          </View>
+          <View style={styles.resumeInfo}>
+            <Text style={styles.resumeLabel}>TIẾP TỤC NGHE</Text>
+            <Text style={styles.resumeTitle} numberOfLines={1}>
+              {lastProgress.bookTitle}
+            </Text>
+            <Text style={styles.resumeChapter} numberOfLines={1}>
+              {lastProgress.chapterTitle} • {resumePercent}%{lastProgress.totalSentences > 0 ? ` (câu ${lastProgress.sentenceIndex + 1}/${lastProgress.totalSentences})` : ''}
+            </Text>
+            <View style={styles.resumeBarBg}>
+              <View style={[styles.resumeBarFill, { width: `${resumePercent}%` }]} />
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color={Colors.textMuted} />
+        </TouchableOpacity>
+      )}
       {/* Hero Featured Card */}
       {featuredBook && (
         <View style={styles.heroWrapper}>
@@ -206,6 +241,53 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  resumeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  resumeIconBox: {
+    marginRight: 12,
+  },
+  resumeInfo: {
+    flex: 1,
+  },
+  resumeLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+    letterSpacing: 1,
+  },
+  resumeTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginTop: 2,
+  },
+  resumeChapter: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  resumeBarBg: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  resumeBarFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.primary,
   },
   heroWrapper: {
     paddingHorizontal: 20,

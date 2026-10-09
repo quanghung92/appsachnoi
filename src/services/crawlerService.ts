@@ -1,6 +1,21 @@
 import { Book, Chapter } from '../types';
 import { DRIVE_BOOKS } from '../data/books';
 import { WEB_NOVELS } from '../data/novels';
+import { ttsService } from './ttsService';
+
+export interface CrawlResult {
+  status: string;
+  url: string;
+  story_title: string;
+  chapter_title: string;
+  chapter_number: number;
+  author: string;
+  content: string;
+  content_length: number;
+  prev_url: string;
+  next_url: string;
+  message?: string;
+}
 
 export class CrawlerService {
   /**
@@ -21,10 +36,65 @@ export class CrawlerService {
   }
 
   /**
+   * Cào chương truyện thật qua server (PLAN B1).
+   * Trả về null nếu server không có hoặc cào thất bại.
+   */
+  public async crawlChapter(url: string): Promise<CrawlResult | null> {
+    try {
+      const ip = ttsService.getServerIp();
+      const apiUrl = `http://${ip}:${ttsService.getServerPort()}/api/crawl?url=${encodeURIComponent(url.trim())}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const res = await fetch(apiUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (!res.ok) return null;
+      const data = (await res.json()) as CrawlResult;
+      if (data.status !== 'ok' || !data.content) return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  private bookFromCrawl(data: CrawlResult, sourceUrl: string): Book {
+    const chapter: Chapter = {
+      id: `crawled_c_${Date.now()}`,
+      chapterNumber: data.chapter_number || 1,
+      title: data.chapter_title || 'Chương mới',
+      content: data.content,
+      url: data.url,
+    };
+    return {
+      id: `crawled_${Date.now()}`,
+      title: data.story_title || 'Truyện web',
+      author: data.author || 'Tác giả online',
+      category: 'Truyện chữ web',
+      description: `Cào từ: ${sourceUrl}`,
+      coverUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=500&auto=format&fit=crop&q=60',
+      sourceUrl,
+      type: 'web_novel',
+      rating: 4.9,
+      listenCount: `${Math.max(1, Math.round(data.content_length / 2000))} phút đọc`,
+      chapters: [chapter],
+    };
+  }
+
+  /**
    * Extract story/book from any direct URL (Google Drive, Web Novel, Blog)
    */
   public async parseUrl(url: string): Promise<Book> {
     const trimmed = url.trim();
+
+    // Thử cào thật qua server trước (TruyenFull, TangThuVien, DTruyen...)
+    const isNovelLink =
+      /truyenfull|tangthuvien|dtruyen|metruyenchu|truyen/i.test(trimmed);
+    if (isNovelLink) {
+      const crawled = await this.crawlChapter(trimmed);
+      if (crawled) {
+        return this.bookFromCrawl(crawled, trimmed);
+      }
+      // Rớt xuống mock bên dưới nếu server không cào được
+    }
 
     // Check if it's a Google Drive link
     if (trimmed.includes('drive.google.com')) {

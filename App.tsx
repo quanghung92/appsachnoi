@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Platform,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from './src/theme/colors';
@@ -14,6 +15,7 @@ import { Book, Chapter, VoiceOption } from './src/types';
 import { DRIVE_BOOKS } from './src/data/books';
 import { WEB_NOVELS } from './src/data/novels';
 import { ttsService, VIETNAMESE_VOICES } from './src/services/ttsService';
+import { storageService, ReadingProgress } from './src/services/storageService';
 
 // Components
 import { Header } from './src/components/Header';
@@ -62,6 +64,31 @@ export default function App() {
   const [isSleepTimerVisible, setIsSleepTimerVisible] = useState<boolean>(false);
   const [isImportModalVisible, setIsImportModalVisible] = useState<boolean>(false);
 
+  // Đọc tiếp (PLAN B2)
+  const [lastProgress, setLastProgress] = useState<ReadingProgress | null>(null);
+
+  // Nạp sách đã lưu + tiến độ nghe khi mở app
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await storageService.getSavedBooks();
+        if (saved.length > 0) {
+          const webNovels = saved.filter(b => b.type === 'web_novel');
+          const others = saved.filter(b => b.type !== 'web_novel');
+          if (webNovels.length > 0) setNovels(prev => [...webNovels, ...prev]);
+          if (others.length > 0) {
+            setBooks(prev => [...others, ...prev]);
+            setSavedBooks(prev => [...others, ...prev]);
+          }
+        }
+        const progress = await storageService.getLastProgress();
+        setLastProgress(progress);
+      } catch (e) {
+        console.log('[App] load storage error:', e);
+      }
+    })();
+  }, []);
+
   // Subscribe to TTS Progress
   useEffect(() => {
     const unsubscribe = ttsService.addProgressListener((progress) => {
@@ -105,7 +132,7 @@ export default function App() {
     }
   };
 
-  const startReading = async (text: string, book?: Book, chapter?: Chapter) => {
+  const startReading = async (text: string, book?: Book, chapter?: Chapter, startSentenceIndex: number = 0) => {
     setIsPlaying(true);
     if (book) {
       ttsService.setNowPlaying(book.title, chapter?.title || book.author);
@@ -119,7 +146,80 @@ export default function App() {
       (err) => {
         console.log('TTS Error:', err);
         setIsPlaying(false);
-      }
+      },
+      // onSentence: ghi nhớ tiến độ từng câu (PLAN B2)
+      (sentenceIndex, totalSentences) => {
+        if (book && chapter) {
+          const progress: ReadingProgress = {
+            bookId: book.id,
+            bookTitle: book.title,
+            chapterId: chapter.id,
+            chapterNumber: chapter.chapterNumber || 0,
+            chapterTitle: chapter.title,
+            sentenceIndex,
+            positionMs: 0,
+            totalSentences,
+            lastListenedAt: Date.now(),
+          };
+          setLastProgress(progress);
+          storageService.saveProgress(progress).catch(() => {});
+        }
+      },
+      startSentenceIndex
+    );
+  };
+
+  /** Tiếp tục nghe từ chỗ đang dở (PLAN B2). */
+  const handleResume = async () => {
+    if (!lastProgress) return;
+    const allBooks = [...books, ...novels];
+    const book = allBooks.find(b => b.id === lastProgress.bookId);
+    if (!book) {
+      Alert.alert('Không tìm thấy sách', 'Sách này có thể đã bị xóa khỏi tủ.');
+      return;
+    }
+    const chapter =
+      book.chapters.find(c => c.id === lastProgress.chapterId) || book.chapters[0];
+    if (!chapter) return;
+    setCurrentBook(book);
+    setCurrentChapter(chapter);
+    addToRecent(book);
+    await startReading(
+      chapter.content,
+      book,
+      chapter,
+      lastProgress.sentenceIndex
+    );
+    setIsFullPlayerVisible(true);
+  };
+
+  /** Xóa sách khỏi tủ (kèm xác nhận, PLAN B2). */
+  const handleDeleteBook = (book: Book) => {
+    Alert.alert(
+      'Xóa sách',
+      `Xóa "${book.title}" khỏi tủ sách? Toàn bộ nội dung và tiến độ nghe sẽ bị xóa khỏi máy.`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        {
+          text: 'Xóa',
+          style: 'destructive',
+          onPress: async () => {
+            await storageService.deleteBook(book.id);
+            setBooks(prev => prev.filter(b => b.id !== book.id));
+            setNovels(prev => prev.filter(b => b.id !== book.id));
+            setSavedBooks(prev => prev.filter(b => b.id !== book.id));
+            setRecentBooks(prev => prev.filter(b => b.id !== book.id));
+            if (currentBook?.id === book.id) {
+              ttsService.stop();
+              setCurrentBook(null);
+              setCurrentChapter(null);
+              setIsPlaying(false);
+            }
+            const progress = await storageService.getLastProgress();
+            setLastProgress(progress);
+          },
+        },
+      ]
     );
   };
 
@@ -213,6 +313,8 @@ export default function App() {
       setBooks((prev) => [newBook, ...prev]);
     }
     setSavedBooks((prev) => [newBook, ...prev]);
+    // Lưu offline vào máy (PLAN B2)
+    storageService.saveBook(newBook).catch(() => {});
 
     if (playImmediately) {
       setCurrentBook(newBook);
@@ -255,10 +357,12 @@ export default function App() {
               currentBook={currentBook}
               isPlaying={isPlaying}
               selectedCategory={selectedCategory}
+              lastProgress={lastProgress}
               onSelectCategory={setSelectedCategory}
               onSelectBook={handleSelectBook}
               onTogglePlay={handleTogglePlay}
               onOpenImportModal={() => setIsImportModalVisible(true)}
+              onResume={handleResume}
             />
           )}
 
@@ -282,6 +386,7 @@ export default function App() {
               onSelectBook={handleSelectBook}
               onTogglePlay={handleTogglePlay}
               onOpenImportModal={() => setIsImportModalVisible(true)}
+              onDeleteBook={handleDeleteBook}
             />
           )}
         </View>

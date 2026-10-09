@@ -61,8 +61,8 @@ export const Header: React.FC<HeaderProps> = ({
           accessibilityLabel="Chọn giọng đọc"
         >
           <Ionicons name="mic" size={16} color={Colors.secondary} />
-          <Text style={styles.voiceBtnText}>
-            {currentVoice.gender === 'female' ? 'Hoài My' : 'Nam Minh'}
+          <Text style={styles.voiceBtnText} numberOfLines={1}>
+            {currentVoice.name.split(' (')[0]}
           </Text>
         </TouchableOpacity>
 

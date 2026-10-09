@@ -10,6 +10,13 @@ from kokoro_vietnamese.onnx_cli import KokoroVietnameseONNX
 
 sys.stdout.reconfigure(encoding='utf-8')
 
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    BeautifulSoup = None
+    HAS_BS4 = False
+
 PORT = 3000
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "audio_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -25,6 +32,128 @@ def get_kokoro_model(voice_id: str):
 
 SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "audio_samples")
 AUDITION_HTML = os.path.join(os.path.dirname(__file__), "audition.html")
+
+# ---------------------------------------------------------------------------
+# Web novel crawler (PLAN B1): boc tach noi dung chuong that tu TruyenFull...
+# ---------------------------------------------------------------------------
+CRAWL_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
+
+JUNK_PATTERNS = [
+    "truyenfull", "tangthuvien", "dtruyen", "metruyenchu",
+    "quảng cáo", "bình luận", "mời bạn", "vip", "donate",
+]
+
+
+def _clean_text(text: str) -> str:
+    lines = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if any(p in low for p in JUNK_PATTERNS) and len(line) < 120:
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def crawl_chapter(url: str) -> dict:
+    """Crawl 1 chuong truyen, tra ve dict. Raise Exception khi loi."""
+    if not HAS_BS4:
+        raise RuntimeError("Thieu thu vien beautifulsoup4. Chay: pip install beautifulsoup4")
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": CRAWL_UA})
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+    final_url = resp.geturl()
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "iframe", "ins"]):
+        tag.decompose()
+
+    host = urllib.parse.urlparse(final_url).netloc.lower()
+
+    story_title = ""
+    chapter_title = ""
+    content = ""
+    prev_url = ""
+    next_url = ""
+
+    def pick_text(selectors):
+        for sel in selectors:
+            el = soup.select_one(sel)
+            if el:
+                t = el.get_text(" ", strip=True)
+                if len(t) > 3:
+                    return t
+        return ""
+
+    if "truyenfull" in host:
+        story_title = pick_text(["h1", ".truyen-title"])
+        chapter_title = pick_text([".chapter-title", "h2"])
+        el = soup.select_one("#chapter-c")
+        if el:
+            content = el.get_text("\n", strip=True)
+        for a in soup.select("a#prev_chap"):
+            href = a.get("href") or ""
+            if href.startswith("http"):
+                prev_url = href
+        for a in soup.select("a#next_chap"):
+            href = a.get("href") or ""
+            if href.startswith("http"):
+                next_url = href
+    else:
+        # Site khac: thu cac selector pho bien
+        story_title = pick_text(["h1", ".truyen-title", ".story-title"])
+        chapter_title = pick_text([".chapter-title", "h2", ".chr-title"])
+        for sel in ["#chapter-c", ".chapter-c", "#chapter-content",
+                    ".chapter-content", "#chr-content", ".box-chap",
+                    "#vungdoc", ".entry-content", "article"]:
+            el = soup.select_one(sel)
+            if el:
+                t = el.get_text("\n", strip=True)
+                if len(t) > 200:
+                    content = t
+                    break
+        if not content:
+            # Fallback: lay khoi van ban lon nhat trong body
+            best, best_len = "", 0
+            for div in soup.find_all(["div", "article"]):
+                t = div.get_text("\n", strip=True)
+                if len(t) > best_len and len(t) > 300:
+                    best, best_len = t, len(t)
+            content = best
+
+    content = _clean_text(content)
+    if not content or len(content) < 100:
+        raise RuntimeError("Khong boc tach duoc noi dung chuong (site co the chan bot)")
+
+    if not story_title:
+        story_title = (soup.title.get_text(strip=True)[:80] if soup.title else "Truyện web")
+    if not chapter_title:
+        m = urllib.parse.urlparse(final_url).path.rstrip("/").split("/")[-1]
+        chapter_title = m.replace("-", " ").title() or "Chương mới"
+
+    chapter_number = 0
+    mnum = __import__("re").search(r"chuong-(\d+)", final_url)
+    if mnum:
+        chapter_number = int(mnum.group(1))
+
+    return {
+        "status": "ok",
+        "url": final_url,
+        "story_title": story_title,
+        "chapter_title": chapter_title,
+        "chapter_number": chapter_number,
+        "author": "",
+        "content": content,
+        "content_length": len(content),
+        "prev_url": prev_url,
+        "next_url": next_url,
+    }
+
 
 class TTSHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -79,6 +208,25 @@ class TTSHandler(BaseHTTPRequestHandler):
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"status":"ok","engine":"kokoro+edge","voices":["kokoro_storyvert","kokoro_diem_trinh","kokoro_hung_thinh","vi-VN-HoaiMyNeural","vi-VN-NamMinhNeural"]}')
+                return
+
+            if parsed.path == "/api/crawl":
+                import json as _json
+                query = urllib.parse.parse_qs(parsed.query)
+                url = query.get("url", [""])[0]
+                try:
+                    result = crawl_chapter(url)
+                    body = _json.dumps(result, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                except Exception as e:
+                    body = _json.dumps({"status": "error", "message": str(e)},
+                                       ensure_ascii=False).encode("utf-8")
+                    self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
                 return
 
             if parsed.path in ["/tts", "/tts.wav", "/tts.mp3"]:

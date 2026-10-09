@@ -1,6 +1,7 @@
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
 import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
+import { Platform } from 'react-native';
 import { VoiceOption } from '../types';
 
 export const VIETNAMESE_VOICES: VoiceOption[] = [
@@ -52,6 +53,8 @@ type ProgressListener = (progress: {
   durationMs: number;
 }) => void;
 
+type SentenceListener = (index: number, total: number) => void;
+
 import { NativeModules } from 'react-native';
 
 const getDetectedHostIp = (): string => {
@@ -67,8 +70,14 @@ const getDetectedHostIp = (): string => {
   return '192.168.110.172';
 };
 
+/** Ước lượng thời lượng đọc (ms) khi chưa tải được file audio. */
+const estimateMs = (text: string, speed: number): number => {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return Math.max((words / ((140 / 60) * speed)) * 1000, 800);
+};
+
 class TTSService {
-  private currentVoice: VoiceOption = VIETNAMESE_VOICES[0]; // Default to Storyvert
+  private currentVoice: VoiceOption = VIETNAMESE_VOICES[0];
   private currentSpeed: number = 1.0;
   private isSpeaking: boolean = false;
   private isPaused: boolean = false;
@@ -80,6 +89,18 @@ class TTSService {
   private serverPort: number = 3000;
   private activePlayer: AudioPlayer | null = null;
   private isUsingServerAudio: boolean = false;
+
+  // --- Sentence chunking state (PLAN B3: zero-waste dual buffer) ---
+  private sentences: string[] = [];
+  private sentenceIndex: number = 0;
+  private chunkUris: (string | null)[] = [];
+  private chunkDurationsMs: (number | null)[] = [];
+  private chunkPrefetching: (Promise<string | null> | null)[] = [];
+  private playbackId: number = 0;
+  private consecutiveFailures: number = 0;
+  private onSentenceChange: SentenceListener | null = null;
+  private speakOnFinish: (() => void) | null = null;
+  private speakOnError: ((e: any) => void) | null = null;
 
   constructor() {
     this.initAudioMode();
@@ -128,8 +149,11 @@ class TTSService {
     this.serverIp = clean;
   }
 
+  public getServerPort(): number {
+    return this.serverPort;
+  }
+
   public async testServerConnection(): Promise<{ success: boolean; ip: string; message: string }> {
-    // Try current IP first, then fallback to 192.168.110.172 if different
     const candidateIps = Array.from(new Set([this.serverIp, '192.168.110.172', getDetectedHostIp()]));
 
     for (const ip of candidateIps) {
@@ -143,7 +167,7 @@ class TTSService {
 
         if (res.ok) {
           const data = await res.json();
-          this.serverIp = ip; // Auto-update to working IP
+          this.serverIp = ip;
           return {
             success: true,
             ip: this.serverIp,
@@ -175,84 +199,241 @@ class TTSService {
     });
   }
 
+  /**
+   * Tách văn bản thành câu. Gom câu quá ngắn (< 5 từ) vào câu trước
+   * để ngữ điệu không bị giật cục (theo PLAN B3), nhưng không để
+   * chunk gộp vượt quá ~30 từ để vẫn phát nhanh câu đầu.
+   */
+  public splitSentences(text: string): string[] {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (!normalized) return [];
+    const raw = normalized.match(/[^.!?…\n]+[.!?…\n]+|[^.!?…\n]+$/g) || [normalized];
+    const merged: string[] = [];
+    for (const part of raw) {
+      const t = part.trim();
+      if (!t) continue;
+      const wordCount = t.split(/\s+/).length;
+      if (wordCount < 5 && merged.length > 0) {
+        const prevWords = merged[merged.length - 1].split(/\s+/).length;
+        if (prevWords + wordCount <= 30) {
+          merged[merged.length - 1] += ' ' + t;
+          continue;
+        }
+      }
+      merged.push(t);
+    }
+    return merged;
+  }
+
+  public getSentenceIndex(): number {
+    return this.sentenceIndex;
+  }
+
+  public getTotalSentences(): number {
+    return this.sentences.length;
+  }
+
   public async speak(
     text: string,
     onFinish?: () => void,
-    onError?: (error: any) => void
+    onError?: (error: any) => void,
+    onSentence?: SentenceListener,
+    startSentenceIndex: number = 0
   ) {
     await this.stop();
 
     if (!text || text.trim().length === 0) return;
 
+    this.playbackId += 1;
+    const myId = this.playbackId;
     this.isSpeaking = true;
     this.isPaused = false;
+    this.speakOnFinish = onFinish || null;
+    this.speakOnError = onError || null;
+    this.onSentenceChange = onSentence || null;
+    this.consecutiveFailures = 0;
 
-    // Try playing through Kokoro / Edge server first if available
-    const playedViaServer = await this.tryPlayViaServer(text, onFinish, onError);
-    if (playedViaServer) {
+    this.sentences = this.splitSentences(text);
+    const startIdx = Math.max(0, Math.min(startSentenceIndex, this.sentences.length - 1));
+    this.sentenceIndex = startIdx;
+    this.chunkUris = new Array(this.sentences.length).fill(null);
+    this.chunkDurationsMs = new Array(this.sentences.length).fill(null);
+    this.chunkPrefetching = new Array(this.sentences.length).fill(null);
+
+    // Web không có FileSystem.downloadAsync -> dùng giọng hệ thống luôn,
+    // tránh 3 lần thử server vô ích rồi mới báo lỗi.
+    if (Platform.OS === 'web') {
+      this.playViaDeviceSpeech(text, onFinish, onError);
       return;
     }
 
-    // Fallback to on-device Speech engine
-    this.playViaDeviceSpeech(text, onFinish, onError);
+    // Thử câu đầu tiên qua server. Nếu server chết -> fallback giọng hệ thống.
+    const firstUri = await this.fetchChunk(startIdx, myId);
+    if (myId !== this.playbackId) return;
+    if (!firstUri) {
+      this.playViaDeviceSpeech(text, onFinish, onError);
+      return;
+    }
+    this.playChunk(startIdx, myId);
   }
 
-  private async tryPlayViaServer(
-    text: string,
-    onFinish?: () => void,
-    onError?: (error: any) => void
-  ): Promise<boolean> {
+  private chunkUrl(index: number): string {
+    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+    const text = this.sentences[index];
+    return `http://${this.serverIp}:${this.serverPort}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
+  }
+
+  private chunkFileUri(index: number, myId: number): string {
+    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+    const cacheDir = (FileSystem.cacheDirectory as string) || '';
+    return `${cacheDir}tts_${myId}_${index}.${ext}`;
+  }
+
+  /** Tải 1 câu về máy. Trả về uri file hoặc null nếu lỗi. */
+  private async fetchChunk(index: number, myId: number): Promise<string | null> {
+    if (myId !== this.playbackId) return null;
+    if (this.chunkUris[index]) return this.chunkUris[index];
+    if (!this.chunkPrefetching[index]) {
+      this.chunkPrefetching[index] = (async () => {
+        try {
+          const url = this.chunkUrl(index);
+          const localFile = this.chunkFileUri(index, myId);
+          const result = await FileSystem.downloadAsync(url, localFile);
+          if (myId !== this.playbackId) {
+            FileSystem.deleteAsync(localFile, { idempotent: true }).catch(() => {});
+            return null;
+          }
+          if (result && result.status === 200) {
+            this.chunkUris[index] = result.uri;
+            return result.uri;
+          }
+          return null;
+        } catch {
+          return null;
+        } finally {
+          if (myId === this.playbackId) this.chunkPrefetching[index] = null;
+        }
+      })();
+    }
+    return this.chunkPrefetching[index];
+  }
+
+  /** Nạp gối đầu câu tiếp theo trong lúc câu hiện tại đang phát. */
+  private prefetchNext(index: number, myId: number) {
+    const next = index + 1;
+    if (next < this.sentences.length && !this.chunkUris[next]) {
+      this.fetchChunk(next, myId).catch(() => {});
+    }
+  }
+
+  private async playChunk(index: number, myId: number) {
+    if (myId !== this.playbackId) return;
+    if (index >= this.sentences.length) {
+      this.finishPlayback(myId);
+      return;
+    }
+
+    this.sentenceIndex = index;
+    if (this.onSentenceChange) {
+      try {
+        this.onSentenceChange(index, this.sentences.length);
+      } catch {}
+    }
+
+    const uri = await this.fetchChunk(index, myId);
+    if (myId !== this.playbackId) return;
+
+    if (!uri) {
+      this.consecutiveFailures += 1;
+      console.log(`[TTS] Chunk ${index} failed (${this.consecutiveFailures} liên tiếp)`);
+      if (this.consecutiveFailures >= 3) {
+        this.cleanUp();
+        this.notifyProgress(0, 1000, false);
+        if (this.speakOnError) this.speakOnError(new Error('Server TTS không phản hồi'));
+        return;
+      }
+      // Bỏ qua câu lỗi, sang câu tiếp theo
+      this.playChunk(index + 1, myId);
+      return;
+    }
+    this.consecutiveFailures = 0;
+
+    // Nạp gối đầu câu tiếp theo ngay khi bắt đầu phát câu này
+    this.prefetchNext(index, myId);
+
     try {
-      const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
-      const audioUrl = `http://${this.serverIp}:${this.serverPort}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
-      const localFile = `${FileSystem.cacheDirectory}tts_${Date.now()}.${ext}`;
-
-      console.log('[TTS] Fetching audio from server:', audioUrl);
-      const downloadResult = await FileSystem.downloadAsync(audioUrl, localFile);
-
-      if (!downloadResult || downloadResult.status !== 200) {
-        console.log('[TTS] Server returned HTTP', downloadResult?.status);
-        return false;
-      }
-
-      console.log('[TTS] Audio downloaded successfully to:', downloadResult.uri);
-
       if (setAudioModeAsync) {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          shouldPlayInBackground: true,
-        });
+        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true });
       }
-
-      this.activePlayer = createAudioPlayer(downloadResult.uri, { updateInterval: 250 });
+      // Dọn player cũ
+      if (this.activePlayer) {
+        try {
+          this.activePlayer.remove();
+        } catch {}
+        this.activePlayer = null;
+      }
+      this.activePlayer = createAudioPlayer(uri, { updateInterval: 250 });
       if (!this.activePlayer) {
-        return false;
+        this.playChunk(index + 1, myId);
+        return;
       }
-
       this.isUsingServerAudio = true;
+      const player = this.activePlayer;
 
-      this.activePlayer.addListener('playbackStatusUpdate', (status: any) => {
-        if (!this.isSpeaking) return;
-
+      player.addListener('playbackStatusUpdate', (status: any) => {
+        if (myId !== this.playbackId || !this.isSpeaking) return;
         const posMs = (status.currentTime || 0) * 1000;
-        const durMs = (status.duration || 1) * 1000;
-        this.notifyProgress(posMs, durMs, status.playing);
-
+        const durMs = (status.duration || 0) * 1000;
+        if (durMs > 0) this.chunkDurationsMs[index] = durMs;
+        this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), status.playing);
         if (status.didJustFinish) {
-          this.cleanUp();
-          this.notifyProgress(durMs, durMs, false);
-          FileSystem.deleteAsync(downloadResult.uri, { idempotent: true }).catch(() => {});
-          if (onFinish) onFinish();
+          // Zero-waste: xóa ngay file câu vừa đọc xong
+          const finishedUri = this.chunkUris[index];
+          this.chunkUris[index] = null;
+          if (finishedUri) {
+            FileSystem.deleteAsync(finishedUri, { idempotent: true }).catch(() => {});
+          }
+          try {
+            player.remove();
+          } catch {}
+          if (this.activePlayer === player) this.activePlayer = null;
+          this.playChunk(index + 1, myId);
         }
       });
 
-      this.activePlayer.play();
-      return true;
+      player.play();
     } catch (err) {
-      console.log('[TTS] Server audio failed, falling back to on-device Speech:', err);
-      this.isUsingServerAudio = false;
-      this.activePlayer = null;
-      return false;
+      console.log('[TTS] playChunk error:', err);
+      this.playChunk(index + 1, myId);
+    }
+  }
+
+  /** Tổng ms đã nghe = các câu trước + vị trí trong câu hiện tại. */
+  private cumulativeMs(currentIndex: number, posInChunkMs: number): number {
+    let total = 0;
+    for (let i = 0; i < currentIndex; i++) {
+      total += this.chunkDurationsMs[i] ?? estimateMs(this.sentences[i], this.currentSpeed);
+    }
+    return total + posInChunkMs;
+  }
+
+  private totalEstimatedMs(): number {
+    let total = 0;
+    for (let i = 0; i < this.sentences.length; i++) {
+      total += this.chunkDurationsMs[i] ?? estimateMs(this.sentences[i], this.currentSpeed);
+    }
+    return Math.max(total, 1000);
+  }
+
+  private finishPlayback(myId: number) {
+    if (myId !== this.playbackId) return;
+    const total = this.totalEstimatedMs();
+    this.cleanUp();
+    this.notifyProgress(total, total, false);
+    if (this.speakOnFinish) {
+      const cb = this.speakOnFinish;
+      this.speakOnFinish = null;
+      cb();
     }
   }
 
@@ -330,6 +511,15 @@ class TTSService {
   }
 
   public async stop() {
+    this.playbackId += 1; // vô hiệu hóa mọi chunk đang tải/phát dở
+    const uris = this.chunkUris.filter(Boolean) as string[];
+    this.chunkUris = [];
+    this.chunkPrefetching = [];
+    this.sentences = [];
+    // Xóa sạch file tạm còn sót
+    for (const uri of uris) {
+      FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
     this.cleanUp();
     if (this.activePlayer) {
       try {
@@ -363,12 +553,39 @@ class TTSService {
   }
 
   public async seekTo(ms: number) {
-    if (this.isUsingServerAudio && this.activePlayer) {
-      try {
-        const sec = Math.max(0, ms / 1000);
-        await this.activePlayer.seekTo(sec);
-      } catch (e) {
-        console.log('[TTS] seekTo error:', e);
+    if (this.isUsingServerAudio && this.sentences.length > 0) {
+      // Tìm câu chứa vị trí ms (dựa trên thời lượng đã biết hoặc ước lượng)
+      let acc = 0;
+      let targetIndex = 0;
+      for (let i = 0; i < this.sentences.length; i++) {
+        const d = this.chunkDurationsMs[i] ?? estimateMs(this.sentences[i], this.currentSpeed);
+        if (ms < acc + d) {
+          targetIndex = i;
+          break;
+        }
+        acc += d;
+        targetIndex = i;
+      }
+      if (targetIndex !== this.sentenceIndex) {
+        // Nhảy sang câu khác: phát lại từ câu đó
+        const myId = this.playbackId;
+        if (this.activePlayer) {
+          try {
+            this.activePlayer.pause();
+            this.activePlayer.remove();
+          } catch {}
+          this.activePlayer = null;
+        }
+        this.playChunk(targetIndex, myId);
+        return;
+      }
+      if (this.activePlayer) {
+        try {
+          const offsetMs = Math.max(0, ms - acc);
+          await this.activePlayer.seekTo(offsetMs / 1000);
+        } catch (e) {
+          console.log('[TTS] seekTo error:', e);
+        }
       }
     }
     this.elapsedMs = ms;
@@ -381,4 +598,3 @@ class TTSService {
 }
 
 export const ttsService = new TTSService();
-

@@ -19,6 +19,7 @@ interface LibraryScreenProps {
   onSelectBook: (book: Book, chapter?: Chapter) => void;
   onTogglePlay: (book: Book) => void;
   onOpenImportModal: () => void;
+  onDeleteBook: (book: Book) => void;
 }
 
 export const LibraryScreen: React.FC<LibraryScreenProps> = ({
@@ -29,6 +30,7 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({
   onSelectBook,
   onTogglePlay,
   onOpenImportModal,
+  onDeleteBook,
 }) => {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -129,6 +131,16 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({
                 </Text>
                 <Text style={styles.savedCategory}>{book.category} • {book.chapters.length} chương</Text>
               </View>
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  onDeleteBook(book);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="trash-outline" size={18} color={Colors.error} />
+              </TouchableOpacity>
               <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
             </TouchableOpacity>
           ))}
@@ -310,5 +322,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  deleteBtn: {
+    padding: 8,
+    marginRight: 2,
   },
 });
