@@ -87,6 +87,9 @@ class TTSService {
   private elapsedMs: number = 0;
   private serverIp: string = getDetectedHostIp();
   private serverPort: number = 3000;
+  // URL đầy đủ của server online (vd https://user-space.hf.space).
+  // Khi có giá trị này, app dùng nó thay vì http://ip:port.
+  private serverBaseUrl: string | null = null;
   private activePlayer: AudioPlayer | null = null;
   private isUsingServerAudio: boolean = false;
 
@@ -147,6 +150,23 @@ class TTSService {
     let clean = ip.trim();
     clean = clean.replace(/^https?:\/\//, '').replace(/:3000.*$/, '').replace(/\/.*$/, '');
     this.serverIp = clean;
+    this.serverBaseUrl = null;
+  }
+
+  /**
+   * Đặt URL đầy đủ của server online, vd "https://quanghung92-audioverse.hf.space".
+   * Dùng cho Hugging Face Spaces hoặc bất kỳ server nào có HTTPS.
+   */
+  public setServerUrl(url: string) {
+    let clean = url.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//.test(clean)) {
+      clean = 'https://' + clean;
+    }
+    this.serverBaseUrl = clean;
+  }
+
+  public getServerUrl(): string {
+    return this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
   }
 
   public getServerPort(): number {
@@ -154,6 +174,21 @@ class TTSService {
   }
 
   public async testServerConnection(): Promise<{ success: boolean; ip: string; message: string }> {
+    // Nếu đã đặt URL online (HF Spaces...), chỉ test đúng URL đó.
+    if (this.serverBaseUrl) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(`${this.serverBaseUrl}/health`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const data = await res.json();
+          return { success: true, ip: this.serverBaseUrl, message: `Kết nối thành công! (${data.engine || 'Kokoro'})` };
+        }
+      } catch (e: any) { /* fall through */ }
+      return { success: false, ip: this.serverBaseUrl, message: 'Không kết nối được tới server online' };
+    }
+
     const candidateIps = Array.from(new Set([this.serverIp, '192.168.110.172', getDetectedHostIp()]));
 
     for (const ip of candidateIps) {
@@ -280,7 +315,8 @@ class TTSService {
   private chunkUrl(index: number): string {
     const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
     const text = this.sentences[index];
-    return `http://${this.serverIp}:${this.serverPort}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
+    const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+    return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
   }
 
   private chunkFileUri(index: number, myId: number): string {

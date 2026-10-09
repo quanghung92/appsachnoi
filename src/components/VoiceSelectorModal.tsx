@@ -31,7 +31,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
   });
 
   const [isEditingIp, setIsEditingIp] = useState(false);
-  const [customIp, setCustomIp] = useState(ttsService.getServerIp());
+  const [customIp, setCustomIp] = useState(ttsService.getServerUrl());
 
   const checkConnection = async () => {
     setServerStatus(prev => ({ ...prev, checking: true }));
@@ -41,12 +41,18 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
       connected: result.success,
       message: result.message,
     });
-    setCustomIp(ttsService.getServerIp());
+    setCustomIp(ttsService.getServerUrl());
   };
 
   const handleSaveIp = async () => {
-    if (customIp.trim()) {
-      ttsService.setServerIp(customIp);
+    const v = customIp.trim();
+    if (v) {
+      // Nếu nhập dạng URL (có http hoặc có dấu chấm + không phải IP LAN) -> server online
+      if (/^https?:\/\//i.test(v) || /^[a-z0-9-]+\.[a-z]{2,}/i.test(v)) {
+        ttsService.setServerUrl(v);
+      } else {
+        ttsService.setServerIp(v);
+      }
     }
     setIsEditingIp(false);
     await checkConnection();
@@ -86,8 +92,8 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                   {serverStatus.checking
                     ? 'Đang kiểm tra máy chủ AI...'
                     : serverStatus.connected
-                    ? `Kokoro AI Server: Sẵn sàng (${ttsService.getServerIp()}:3000)`
-                    : `Kokoro AI: Chưa kết nối (${ttsService.getServerIp()}:3000)`}
+                    ? `Kokoro AI Server: Sẵn sàng (${ttsService.getServerUrl()})`
+                    : `Kokoro AI: Chưa kết nối (${ttsService.getServerUrl()})`}
                 </Text>
                 <Text style={styles.serverBannerSubtitle}>
                   {serverStatus.connected
@@ -115,10 +121,10 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                 style={styles.ipInput}
                 value={customIp}
                 onChangeText={setCustomIp}
-                placeholder="Nhập IP máy tính (vd: 192.168.110.172)"
+                placeholder="IP máy tính (192.168.x.x) hoặc link server online"
                 placeholderTextColor={Colors.textMuted}
                 autoCapitalize="none"
-                keyboardType="numeric"
+                keyboardType="url"
               />
               <TouchableOpacity onPress={handleSaveIp} style={styles.saveIpBtn}>
                 <Text style={styles.saveIpText}>Lưu & Thử</Text>
