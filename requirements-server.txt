@@ -1,0 +1,10 @@
+# TTS + Crawler server cho app AudioVerse
+# Cài:  pip install -r requirements-server.txt
+# Chạy: python server.py  (mặc định cổng 3000)
+#
+# LƯU Ý lần chạy đầu: thư viện kokoro_vietnamese sẽ tự tải model
+# từ Hugging Face (~300MB, tải 1 lần duy nhất rồi dùng offline).
+soundfile
+edge_tts
+kokoro_vietnamese
+beautifulsoup4
