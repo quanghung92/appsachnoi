@@ -16,6 +16,7 @@ import { DRIVE_BOOKS } from './src/data/books';
 import { WEB_NOVELS } from './src/data/novels';
 import { ttsService, VIETNAMESE_VOICES } from './src/services/ttsService';
 import { storageService, ReadingProgress } from './src/services/storageService';
+import { crawlerService } from './src/services/crawlerService';
 
 // Components
 import { Header } from './src/components/Header';
@@ -133,12 +134,25 @@ export default function App() {
   };
 
   const startReading = async (text: string, book?: Book, chapter?: Chapter, startSentenceIndex: number = 0) => {
+    let readingText = text;
+    if (book && chapter) {
+      try {
+        const fullContent = await crawlerService.ensureChapterContent(book, chapter);
+        if (fullContent && fullContent.length > readingText.length) {
+          readingText = fullContent;
+          chapter.content = fullContent;
+        }
+      } catch (e) {
+        console.log('[App] Error ensuring full chapter content:', e);
+      }
+    }
+
     setIsPlaying(true);
     if (book) {
       ttsService.setNowPlaying(book.title, chapter?.title || book.author);
     }
     await ttsService.speak(
-      text,
+      readingText,
       // onFinish: Auto-advance to next chapter!
       () => {
         handleNextChapter();

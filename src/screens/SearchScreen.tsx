@@ -111,7 +111,7 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
             <View style={styles.emptyIconCircle}>
               <Ionicons name="search-outline" size={36} color={Colors.textMuted} />
             </View>
-            <Text style={styles.emptyTitle}>Không tìm thấy kết quả "{query}"</Text>
+            <Text style={styles.emptyTitle}>Không tìm thấy kết quả &quot;{query}&quot;</Text>
             <Text style={styles.emptySubtitle}>
               Bạn có thể dán đường dẫn trực tiếp hoặc tải tệp lên để nghe ngay.
             </Text>

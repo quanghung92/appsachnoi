@@ -20,6 +20,9 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
   onSelectVoice,
   onTestVoice,
 }) => {
+  const [serverType, setServerType] = useState<'local' | 'cloud' | 'custom'>(
+    ttsService.getServerType()
+  );
   const [serverStatus, setServerStatus] = useState<{
     checking: boolean;
     connected: boolean;
@@ -41,26 +44,42 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
       connected: result.success,
       message: result.message,
     });
+    setServerType(ttsService.getServerType());
     setCustomIp(ttsService.getServerUrl());
+  };
+
+  const handleSelectPreset = async (type: 'local' | 'cloud') => {
+    if (type === 'local') {
+      ttsService.switchToLocal();
+    } else {
+      ttsService.switchToCloud();
+    }
+    setServerType(type);
+    setIsEditingIp(false);
+    await checkConnection();
   };
 
   const handleSaveIp = async () => {
     const v = customIp.trim();
     if (v) {
-      // Nếu nhập dạng URL (có http hoặc có dấu chấm + không phải IP LAN) -> server online
       if (/^https?:\/\//i.test(v) || /^[a-z0-9-]+\.[a-z]{2,}/i.test(v)) {
         ttsService.setServerUrl(v);
       } else {
         ttsService.setServerIp(v);
       }
     }
+    setServerType(ttsService.getServerType());
     setIsEditingIp(false);
     await checkConnection();
   };
 
   useEffect(() => {
     if (visible) {
-      checkConnection();
+      const timer = setTimeout(() => {
+        setServerType(ttsService.getServerType());
+        checkConnection();
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [visible]);
 
@@ -79,6 +98,69 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
             </TouchableOpacity>
           </View>
 
+          {/* Quick Server Switch (1-Touch Segmented Control) */}
+          <View style={styles.switchContainer}>
+            <TouchableOpacity
+              style={[styles.switchBtn, serverType === 'local' && styles.switchBtnActive]}
+              onPress={() => handleSelectPreset('local')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="laptop"
+                size={14}
+                color={serverType === 'local' ? '#0d1b2a' : Colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.switchBtnText,
+                  serverType === 'local' && styles.switchBtnTextActive,
+                ]}
+              >
+                Máy tính (Local)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.switchBtn, serverType === 'cloud' && styles.switchBtnActive]}
+              onPress={() => handleSelectPreset('cloud')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="cloud"
+                size={14}
+                color={serverType === 'cloud' ? '#0d1b2a' : Colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.switchBtnText,
+                  serverType === 'cloud' && styles.switchBtnTextActive,
+                ]}
+              >
+                Modal Cloud
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.switchBtn, (serverType === 'custom' || isEditingIp) && styles.switchBtnActiveCustom]}
+              onPress={() => setIsEditingIp(!isEditingIp)}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="options-outline"
+                size={14}
+                color={isEditingIp || serverType === 'custom' ? Colors.primary : Colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.switchBtnText,
+                  (serverType === 'custom' || isEditingIp) && styles.switchBtnTextCustom,
+                ]}
+              >
+                Dự phòng
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Server Connection Status Banner */}
           <View style={[styles.serverBanner, serverStatus.connected ? styles.serverBannerOk : styles.serverBannerWarn]}>
             <View style={styles.serverBannerLeft}>
@@ -90,23 +172,22 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
               <View style={styles.serverBannerTextCol}>
                 <Text style={styles.serverBannerTitle}>
                   {serverStatus.checking
-                    ? 'Đang kiểm tra máy chủ AI...'
+                    ? 'Đang kiểm tra kết nối máy chủ AI...'
                     : serverStatus.connected
-                    ? `Kokoro AI Server: Sẵn sàng (${ttsService.getServerUrl()})`
-                    : `Kokoro AI: Chưa kết nối (${ttsService.getServerUrl()})`}
+                    ? `${serverType === 'cloud' ? '☁️ Modal Cloud' : serverType === 'local' ? '💻 Máy tính Local' : '⚙️ Tùy chỉnh'}: Sẵn sàng`
+                    : `${serverType === 'cloud' ? '☁️ Modal Cloud' : '💻 Máy tính Local'}: Chưa kết nối`}
                 </Text>
-                <Text style={styles.serverBannerSubtitle}>
+                <Text style={styles.serverBannerSubtitle} numberOfLines={1}>
                   {serverStatus.connected
-                    ? 'Đang phát trực tiếp bằng Kokoro ONNX CPU siêu nhanh'
-                    : 'Hãy đảm bảo điện thoại bắt cùng Wi-Fi với máy tính (không bật 4G)'}
+                    ? `Đang chạy qua: ${ttsService.getServerUrl()}`
+                    : serverType === 'cloud'
+                    ? 'Serverless tự động khởi động sau 1-2s (nhấn Thử lại)'
+                    : 'Đảm bảo điện thoại chung Wi-Fi và server.py đang chạy'}
                 </Text>
               </View>
             </View>
 
             <View style={styles.bannerActions}>
-              <TouchableOpacity onPress={() => setIsEditingIp(!isEditingIp)} style={styles.editIpBtn} activeOpacity={0.7}>
-                <Ionicons name="pencil" size={13} color={Colors.textLight} />
-              </TouchableOpacity>
               <TouchableOpacity onPress={checkConnection} style={styles.refreshBtn} activeOpacity={0.7}>
                 <Ionicons name="refresh" size={14} color={Colors.primary} />
                 <Text style={styles.refreshBtnText}>Thử lại</Text>
@@ -114,14 +195,14 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
             </View>
           </View>
 
-          {/* Inline IP Editor */}
+          {/* Inline IP / URL Editor (Dự phòng khi muốn nhập thủ công) */}
           {isEditingIp && (
             <View style={styles.ipEditorContainer}>
               <TextInput
                 style={styles.ipInput}
                 value={customIp}
                 onChangeText={setCustomIp}
-                placeholder="IP máy tính (192.168.x.x) hoặc link server online"
+                placeholder="Nhập IP (192.168.x.x) hoặc URL server tùy chỉnh"
                 placeholderTextColor={Colors.textMuted}
                 autoCapitalize="none"
                 keyboardType="url"
@@ -242,6 +323,52 @@ const styles = StyleSheet.create({
   },
   closeBtn: {
     padding: 4,
+  },
+  switchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    backgroundColor: Colors.surfaceElevated,
+    padding: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  switchBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  switchBtnActive: {
+    backgroundColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  switchBtnActiveCustom: {
+    backgroundColor: 'rgba(6, 214, 160, 0.15)',
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  switchBtnText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  switchBtnTextActive: {
+    color: '#0d1b2a',
+    fontWeight: '800',
+  },
+  switchBtnTextCustom: {
+    color: Colors.primary,
+    fontWeight: '700',
   },
   serverBanner: {
     flexDirection: 'row',

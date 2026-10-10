@@ -36,24 +36,123 @@ export class CrawlerService {
   }
 
   /**
-   * Cào chương truyện thật qua server (PLAN B1).
-   * Trả về null nếu server không có hoặc cào thất bại.
+   * Cào trực tiếp từ điện thoại nếu server không phản hồi
    */
-  public async crawlChapter(url: string): Promise<CrawlResult | null> {
+  private async crawlDirect(url: string): Promise<CrawlResult | null> {
     try {
-      const ip = ttsService.getServerIp();
-      const apiUrl = `http://${ip}:${ttsService.getServerPort()}/api/crawl?url=${encodeURIComponent(url.trim())}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      const res = await fetch(apiUrl, { signal: controller.signal });
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
       clearTimeout(timeoutId);
       if (!res.ok) return null;
-      const data = (await res.json()) as CrawlResult;
-      if (data.status !== 'ok' || !data.content) return null;
-      return data;
-    } catch {
-      return null;
+      const html = await res.text();
+      let content = '';
+      const match = html.match(/(?:id|class)=["'](?:chapter-c|chapter-content|reading-content|box-chap)["'][^>]*>([\s\S]*?)<\/div>/i);
+      if (match) {
+        content = match[1]
+          .replace(/<br\s*\/?>/gi, '\n')
+          .replace(/<p[^>]*>/gi, '')
+          .replace(/<\/p>/gi, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/\(adsbygoogle[\s\S]*?\);/g, '')
+          .trim();
+      }
+      if (content.length > 150) {
+        return {
+          status: 'ok',
+          url,
+          story_title: 'Truyện Web',
+          chapter_title: 'Chương mới',
+          chapter_number: 1,
+          author: 'Tác giả Online',
+          content,
+          content_length: content.length,
+          prev_url: '',
+          next_url: '',
+        };
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Cào chương truyện thật qua server (hoặc direct fallback).
+   * Trả về null nếu cào thất bại.
+   */
+  public async crawlChapter(url: string): Promise<CrawlResult | null> {
+    const trimmed = url.trim();
+    // 1. Thử qua server Kokoro (Local PC hoặc Modal Cloud)
+    try {
+      const baseUrl = ttsService.getServerUrl();
+      const apiUrl = `${baseUrl}/api/crawl?url=${encodeURIComponent(trimmed)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch(apiUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = (await res.json()) as CrawlResult;
+        if (data.status === 'ok' && data.content && data.content.length > 100) {
+          return data;
+        }
+      }
+    } catch {}
+
+    // 2. Thử cào trực tiếp từ app nếu server không phản hồi
+    return await this.crawlDirect(trimmed);
+  }
+
+  /**
+   * Đảm bảo chapter có nội dung thật từ nguồn online nếu hiện tại chỉ là mock/sample
+   */
+  public async ensureChapterContent(book: Book, chapter: Chapter): Promise<string> {
+    // Nếu nội dung đã dài (> 800 ký tự) và không phải text thông báo placeholder -> dùng luôn
+    if (
+      chapter.content &&
+      chapter.content.length > 800 &&
+      !chapter.content.startsWith('Hệ thống đã nhận diện')
+    ) {
+      return chapter.content;
     }
+
+    // Xác định URL để cào
+    let targetUrl = chapter.url;
+    if (!targetUrl && book.sourceUrl) {
+      const num = chapter.chapterNumber || 1;
+      const cleanSource = book.sourceUrl.replace(/\/+$/, '');
+      if (cleanSource.includes('wetruyen.com')) {
+        targetUrl = `${cleanSource}/chuong-${num}.html`;
+      } else if (cleanSource.includes('truyenfull')) {
+        const slug = cleanSource.split('/').filter(Boolean).pop();
+        targetUrl = `https://wetruyen.com/${slug}/chuong-${num}.html`;
+      } else {
+        targetUrl = `${cleanSource}/chuong-${num}/`;
+      }
+    }
+
+    if (!targetUrl) {
+      return chapter.content;
+    }
+
+    console.log(`[Crawler] Đang lấy chương thật từ online: ${targetUrl}...`);
+    const crawled = await this.crawlChapter(targetUrl);
+    if (crawled && crawled.content && crawled.content.length > 200) {
+      chapter.content = crawled.content;
+      if (crawled.chapter_title) {
+        chapter.title = crawled.chapter_title;
+      }
+      chapter.url = crawled.url || targetUrl;
+      console.log(`[Crawler] Lấy thành công ${crawled.content_length} ký tự nội dung thật!`);
+      return crawled.content;
+    }
+
+    return chapter.content;
   }
 
   private bookFromCrawl(data: CrawlResult, sourceUrl: string): Book {
@@ -87,13 +186,12 @@ export class CrawlerService {
 
     // Thử cào thật qua server trước (TruyenFull, TangThuVien, DTruyen...)
     const isNovelLink =
-      /truyenfull|tangthuvien|dtruyen|metruyenchu|truyen/i.test(trimmed);
+      /truyenfull|tangthuvien|dtruyen|metruyenchu|metruyencv|wetruyen|truyen/i.test(trimmed);
     if (isNovelLink) {
       const crawled = await this.crawlChapter(trimmed);
       if (crawled) {
         return this.bookFromCrawl(crawled, trimmed);
       }
-      // Rớt xuống mock bên dưới nếu server không cào được
     }
 
     // Check if it's a Google Drive link

@@ -1,7 +1,8 @@
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
 import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
-import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform, NativeModules } from 'react-native';
 import { VoiceOption } from '../types';
 
 export const VIETNAMESE_VOICES: VoiceOption[] = [
@@ -55,8 +56,6 @@ type ProgressListener = (progress: {
 
 type SentenceListener = (index: number, total: number) => void;
 
-import { NativeModules } from 'react-native';
-
 const getDetectedHostIp = (): string => {
   try {
     const scriptURL = (NativeModules.SourceCode as any)?.scriptURL;
@@ -76,6 +75,11 @@ const estimateMs = (text: string, speed: number): number => {
   return Math.max((words / ((140 / 60) * speed)) * 1000, 800);
 };
 
+export const LOCAL_SERVER_IP = '192.168.110.172';
+export const LOCAL_SERVER_PORT = 3000;
+export const LOCAL_SERVER_URL = `http://${LOCAL_SERVER_IP}:${LOCAL_SERVER_PORT}`;
+export const MODAL_SERVER_URL = 'https://linhsamiu--audioverse-kokoro-api.modal.run';
+
 class TTSService {
   private currentVoice: VoiceOption = VIETNAMESE_VOICES[0];
   private currentSpeed: number = 1.0;
@@ -85,10 +89,8 @@ class TTSService {
   private progressInterval: any = null;
   private estimatedDurationMs: number = 10000;
   private elapsedMs: number = 0;
-  private serverIp: string = getDetectedHostIp();
-  private serverPort: number = 3000;
-  // URL đầy đủ của server online (vd https://user-space.hf.space).
-  // Khi có giá trị này, app dùng nó thay vì http://ip:port.
+  private serverIp: string = LOCAL_SERVER_IP;
+  private serverPort: number = LOCAL_SERVER_PORT;
   private serverBaseUrl: string | null = null;
   private activePlayer: AudioPlayer | null = null;
   private isUsingServerAudio: boolean = false;
@@ -107,6 +109,23 @@ class TTSService {
 
   constructor() {
     this.initAudioMode();
+    this.loadSavedServerSettings();
+  }
+
+  private async loadSavedServerSettings() {
+    try {
+      const savedType = await AsyncStorage.getItem('@audioverse/server_type');
+      const savedUrl = await AsyncStorage.getItem('@audioverse/server_url');
+      if (savedType === 'cloud' || (savedUrl && savedUrl.includes('modal.run'))) {
+        this.serverBaseUrl = MODAL_SERVER_URL;
+      } else if (savedType === 'custom' && savedUrl) {
+        this.serverBaseUrl = savedUrl;
+      } else {
+        // Mặc định: Local PC Wi-Fi
+        this.serverIp = LOCAL_SERVER_IP;
+        this.serverBaseUrl = null;
+      }
+    } catch {}
   }
 
   private async initAudioMode() {
@@ -146,16 +165,36 @@ class TTSService {
     return this.serverIp;
   }
 
+  public getServerType(): 'local' | 'cloud' | 'custom' {
+    if (this.serverBaseUrl === MODAL_SERVER_URL) return 'cloud';
+    if (!this.serverBaseUrl) return 'local';
+    return 'custom';
+  }
+
+  public switchToLocal() {
+    this.serverIp = LOCAL_SERVER_IP;
+    this.serverBaseUrl = null;
+    AsyncStorage.setItem('@audioverse/server_type', 'local').catch(() => {});
+    AsyncStorage.removeItem('@audioverse/server_url').catch(() => {});
+  }
+
+  public switchToCloud() {
+    this.serverBaseUrl = MODAL_SERVER_URL;
+    AsyncStorage.setItem('@audioverse/server_type', 'cloud').catch(() => {});
+    AsyncStorage.setItem('@audioverse/server_url', MODAL_SERVER_URL).catch(() => {});
+  }
+
   public setServerIp(ip: string) {
     let clean = ip.trim();
     clean = clean.replace(/^https?:\/\//, '').replace(/:3000.*$/, '').replace(/\/.*$/, '');
     this.serverIp = clean;
     this.serverBaseUrl = null;
+    AsyncStorage.setItem('@audioverse/server_type', 'local').catch(() => {});
+    AsyncStorage.removeItem('@audioverse/server_url').catch(() => {});
   }
 
   /**
-   * Đặt URL đầy đủ của server online, vd "https://quanghung92-audioverse.hf.space".
-   * Dùng cho Hugging Face Spaces hoặc bất kỳ server nào có HTTPS.
+   * Đặt URL tùy chỉnh (dự phòng)
    */
   public setServerUrl(url: string) {
     let clean = url.trim().replace(/\/+$/, '');
@@ -163,6 +202,12 @@ class TTSService {
       clean = 'https://' + clean;
     }
     this.serverBaseUrl = clean;
+    if (clean === MODAL_SERVER_URL) {
+      AsyncStorage.setItem('@audioverse/server_type', 'cloud').catch(() => {});
+    } else {
+      AsyncStorage.setItem('@audioverse/server_type', 'custom').catch(() => {});
+    }
+    AsyncStorage.setItem('@audioverse/server_url', clean).catch(() => {});
   }
 
   public getServerUrl(): string {
@@ -248,9 +293,11 @@ class TTSService {
       const t = part.trim();
       if (!t) continue;
       const wordCount = t.split(/\s+/).length;
-      if (wordCount < 5 && merged.length > 0) {
+      // Gộp các câu ngắn (dưới 20 từ) để thời lượng đọc mỗi chunk đủ dài (~8-15s),
+      // đảm bảo câu tiếp theo luôn được tải xong trước khi câu hiện tại đọc hết.
+      if (merged.length > 0) {
         const prevWords = merged[merged.length - 1].split(/\s+/).length;
-        if (prevWords + wordCount <= 30) {
+        if (prevWords < 20 && prevWords + wordCount <= 45) {
           merged[merged.length - 1] += ' ' + t;
           continue;
         }
@@ -309,6 +356,7 @@ class TTSService {
       this.playViaDeviceSpeech(text, onFinish, onError);
       return;
     }
+    this.prefetchAhead(startIdx, myId);
     this.playChunk(startIdx, myId);
   }
 
@@ -334,17 +382,21 @@ class TTSService {
         try {
           const url = this.chunkUrl(index);
           const localFile = this.chunkFileUri(index, myId);
+          console.log(`[TTS] Đang tải câu ${index + 1}/${this.sentences.length}: ${url.substring(0, 85)}...`);
           const result = await FileSystem.downloadAsync(url, localFile);
           if (myId !== this.playbackId) {
             FileSystem.deleteAsync(localFile, { idempotent: true }).catch(() => {});
             return null;
           }
           if (result && result.status === 200) {
+            console.log(`[TTS] Câu ${index + 1} tải thành công!`);
             this.chunkUris[index] = result.uri;
             return result.uri;
           }
+          console.warn(`[TTS] Câu ${index + 1} tải thất bại, HTTP status: ${result?.status}`);
           return null;
-        } catch {
+        } catch (err) {
+          console.warn(`[TTS] Câu ${index + 1} lỗi mạng:`, err);
           return null;
         } finally {
           if (myId === this.playbackId) this.chunkPrefetching[index] = null;
@@ -354,11 +406,13 @@ class TTSService {
     return this.chunkPrefetching[index];
   }
 
-  /** Nạp gối đầu câu tiếp theo trong lúc câu hiện tại đang phát. */
-  private prefetchNext(index: number, myId: number) {
-    const next = index + 1;
-    if (next < this.sentences.length && !this.chunkUris[next]) {
-      this.fetchChunk(next, myId).catch(() => {});
+  /** Nạp gối đầu 2 câu tiếp theo trong lúc câu hiện tại đang phát để buffer luôn đầy. */
+  private prefetchAhead(index: number, myId: number) {
+    for (let offset = 1; offset <= 2; offset++) {
+      const next = index + offset;
+      if (next < this.sentences.length && !this.chunkUris[next] && !this.chunkPrefetching[next]) {
+        this.fetchChunk(next, myId).catch(() => {});
+      }
     }
   }
 
@@ -394,8 +448,8 @@ class TTSService {
     }
     this.consecutiveFailures = 0;
 
-    // Nạp gối đầu câu tiếp theo ngay khi bắt đầu phát câu này
-    this.prefetchNext(index, myId);
+    // Duy trì buffer luôn có sẵn 2 câu tiếp theo
+    this.prefetchAhead(index, myId);
 
     try {
       if (setAudioModeAsync) {

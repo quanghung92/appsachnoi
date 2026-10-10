@@ -58,28 +58,67 @@ def _clean_text(text: str) -> str:
     return "\n".join(lines)
 
 
+def _fetch_html(target_url: str):
+    import urllib.request
+    headers = {"User-Agent": CRAWL_UA, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8"}
+    req = urllib.request.Request(target_url, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", errors="ignore"), resp.geturl()
+
 def crawl_chapter(url: str) -> dict:
-    """Crawl 1 chuong truyen, tra ve dict. Raise Exception khi loi."""
+    """Crawl 1 chuong truyen, tra ve dict. Ho tro TruyenFull, Wetruyen, Dtruyen, MetruyenCV..."""
     if not HAS_BS4:
         raise RuntimeError("Thieu thu vien beautifulsoup4. Chay: pip install beautifulsoup4")
-    import urllib.request
+    import re
+    import urllib.parse
 
-    req = urllib.request.Request(url, headers={"User-Agent": CRAWL_UA})
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        html = resp.read().decode("utf-8", errors="ignore")
-    final_url = resp.geturl()
+    raw_url = url.strip()
+    slug_match = re.search(r'(?:truyenfull\.[a-z]+|dtruyen\.com|wetruyen\.com|metruyencv\.com)/([a-zA-Z0-9_-]+)', raw_url)
+    slug = slug_match.group(1) if slug_match else ""
+
+    urls_to_try = []
+    if ("truyenfull" in raw_url or "wetruyen" in raw_url) and slug:
+        urls_to_try.append(f"https://wetruyen.com/{slug}/chuong-1.html")
+    urls_to_try.append(raw_url)
+
+    html = None
+    final_url = raw_url
+    last_err = None
+    for u in urls_to_try:
+        try:
+            html, final_url = _fetch_html(u)
+            if html:
+                break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if not html:
+        raise RuntimeError(f"Khong the tai trang truyen: {last_err or raw_url}")
 
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "iframe", "ins"]):
         tag.decompose()
 
-    host = urllib.parse.urlparse(final_url).netloc.lower()
-
-    story_title = ""
-    chapter_title = ""
-    content = ""
-    prev_url = ""
-    next_url = ""
+    # Neu link dua vao la trang chu cua truyen (chua co chuong-X), tu tim link chuong 1
+    is_chap = bool(re.search(r'chuong[-_]\d+|chap[-_]\d+', final_url))
+    if not is_chap:
+        chap1_link = None
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if re.search(r'chuong[-_]1(?:\.html|/|$)', href, re.I):
+                chap1_link = href
+                break
+        if chap1_link:
+            if not chap1_link.startswith("http"):
+                chap1_link = urllib.parse.urljoin(final_url, chap1_link)
+            try:
+                html, final_url = _fetch_html(chap1_link)
+                soup = BeautifulSoup(html, "html.parser")
+                for tag in soup(["script", "style", "iframe", "ins"]):
+                    tag.decompose()
+            except Exception:
+                pass
 
     def pick_text(selectors):
         for sel in selectors:
@@ -90,54 +129,57 @@ def crawl_chapter(url: str) -> dict:
                     return t
         return ""
 
-    if "truyenfull" in host:
-        story_title = pick_text(["h1", ".truyen-title"])
-        chapter_title = pick_text([".chapter-title", "h2"])
-        el = soup.select_one("#chapter-c")
+    story_title = pick_text(["h1", ".truyen-title", ".story-title"])
+    chapter_title = pick_text([".chapter-title", "h2", ".chr-title"])
+
+    content = ""
+    for sel in [
+        "#chapter-c", ".chapter-c", "#chapter-content",
+        ".chapter-content", "#chr-content", ".box-chap",
+        "#vungdoc", ".entry-content", "article"
+    ]:
+        el = soup.select_one(sel)
         if el:
-            content = el.get_text("\n", strip=True)
-        for a in soup.select("a#prev_chap"):
-            href = a.get("href") or ""
-            if href.startswith("http"):
-                prev_url = href
-        for a in soup.select("a#next_chap"):
-            href = a.get("href") or ""
-            if href.startswith("http"):
-                next_url = href
-    else:
-        # Site khac: thu cac selector pho bien
-        story_title = pick_text(["h1", ".truyen-title", ".story-title"])
-        chapter_title = pick_text([".chapter-title", "h2", ".chr-title"])
-        for sel in ["#chapter-c", ".chapter-c", "#chapter-content",
-                    ".chapter-content", "#chr-content", ".box-chap",
-                    "#vungdoc", ".entry-content", "article"]:
-            el = soup.select_one(sel)
-            if el:
-                t = el.get_text("\n", strip=True)
-                if len(t) > 200:
-                    content = t
-                    break
-        if not content:
-            # Fallback: lay khoi van ban lon nhat trong body
-            best, best_len = "", 0
-            for div in soup.find_all(["div", "article"]):
-                t = div.get_text("\n", strip=True)
-                if len(t) > best_len and len(t) > 300:
-                    best, best_len = t, len(t)
-            content = best
+            t = el.get_text("\n", strip=True)
+            if len(t) > 200:
+                content = t
+                break
+
+    if not content:
+        best, best_len = "", 0
+        for div in soup.find_all(["div", "article"]):
+            t = div.get_text("\n", strip=True)
+            if len(t) > best_len and len(t) > 300:
+                best, best_len = t, len(t)
+        content = best
+
+    # Prev & Next links
+    prev_url = ""
+    next_url = ""
+    for a in soup.select("a#prev_chap, a.prev-chap, a.btn-prev"):
+        h = a.get("href") or ""
+        if h.startswith("http"):
+            prev_url = h
+    for a in soup.select("a#next_chap, a.next-chap, a.btn-next"):
+        h = a.get("href") or ""
+        if h.startswith("http"):
+            next_url = h
 
     content = _clean_text(content)
+    # Loai bo quang cao google ads
+    content = re.sub(r'\(adsbygoogle\s*=\s*window\.adsbygoogle\s*\|\|\s*\[\]\)\.push\(\{\}\);?', '', content)
+
     if not content or len(content) < 100:
         raise RuntimeError("Khong boc tach duoc noi dung chuong (site co the chan bot)")
 
     if not story_title:
-        story_title = (soup.title.get_text(strip=True)[:80] if soup.title else "Truyện web")
+        story_title = (soup.title.get_text(strip=True)[:80] if soup.title else "Truyen web")
     if not chapter_title:
         m = urllib.parse.urlparse(final_url).path.rstrip("/").split("/")[-1]
-        chapter_title = m.replace("-", " ").title() or "Chương mới"
+        chapter_title = m.replace("-", " ").title() or "Chuong moi"
 
     chapter_number = 0
-    mnum = __import__("re").search(r"chuong-(\d+)", final_url)
+    mnum = re.search(r"chuong[-_](\d+)", final_url)
     if mnum:
         chapter_number = int(mnum.group(1))
 
