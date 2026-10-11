@@ -1,9 +1,15 @@
 import * as Speech from 'expo-speech';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Crypto from 'expo-crypto';
 import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, NativeModules } from 'react-native';
 import { VoiceOption } from '../types';
+
+/** Thư mục cache audio TTS trên máy (giữ lại giữa các lần nghe để nghe lại offline, không tốn server). */
+const AUDIO_CACHE_SUBDIR = 'tts-audio-cache/';
+/** Giới hạn cache audio: 2GB. Vượt quá sẽ xóa file cũ nhất (LRU theo mtime). */
+const MAX_AUDIO_CACHE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export const VIETNAMESE_VOICES: VoiceOption[] = [
   {
@@ -94,6 +100,11 @@ class TTSService {
   private serverBaseUrl: string | null = null;
   private activePlayer: AudioPlayer | null = null;
   private isUsingServerAudio: boolean = false;
+  // Chapter-audio mode: phát 1 file MP3 nguyên chương (từ batch server / Drive)
+  // thay vì từng câu qua Kokoro. Dùng chung progress listeners của App.
+  private chapterMode: boolean = false;
+  private chapterOnMsProgress: ((posMs: number, durMs: number) => void) | null = null;
+  private chapterLastProgressEmit: number = 0;
 
   // --- Sentence chunking state (PLAN B3: zero-waste dual buffer) ---
   private sentences: string[] = [];
@@ -360,6 +371,86 @@ class TTSService {
     this.playChunk(startIdx, myId);
   }
 
+  /**
+   * Phát 1 file audio nguyên chương (MP3 từ batch server / Drive đã tải về máy).
+   * Dùng chung progress listeners với App (positionMs/durationMs/isSpeaking),
+   * nên MiniPlayer/FullPlayer không cần sửa. Hết chương -> onFinish (App tự sang chương tiếp).
+   * onMsProgress: callback tiến độ (dùng để lưu ReadingProgress), được throttle ~2s.
+   */
+  public async playChapterAudio(
+    localUri: string,
+    onFinish?: () => void,
+    onError?: (error: any) => void,
+    onMsProgress?: (posMs: number, durMs: number) => void,
+    startMs: number = 0
+  ) {
+    await this.stop();
+
+    this.playbackId += 1;
+    const myId = this.playbackId;
+    this.isSpeaking = true;
+    this.isPaused = false;
+    this.chapterMode = true;
+    this.chapterOnMsProgress = onMsProgress || null;
+    this.chapterLastProgressEmit = 0;
+    this.speakOnFinish = onFinish || null;
+    this.speakOnError = onError || null;
+    this.consecutiveFailures = 0;
+
+    if (Platform.OS === 'web') {
+      this.cleanUp();
+      if (onError) onError(new Error('Chapter audio chưa hỗ trợ trên web'));
+      return;
+    }
+
+    try {
+      if (setAudioModeAsync) {
+        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true });
+      }
+      this.activePlayer = createAudioPlayer(localUri, { updateInterval: 500 });
+      if (!this.activePlayer) {
+        throw new Error('Không tạo được audio player');
+      }
+      this.isUsingServerAudio = true;
+      const player = this.activePlayer;
+
+      player.addListener('playbackStatusUpdate', (status: any) => {
+        if (myId !== this.playbackId || !this.isSpeaking) return;
+        const posMs = (status.currentTime || 0) * 1000;
+        const durMs = Math.max((status.duration || 0) * 1000, 1000);
+        this.notifyProgress(posMs, durMs, status.playing);
+        const now = Date.now();
+        if (this.chapterOnMsProgress && now - this.chapterLastProgressEmit > 2000) {
+          this.chapterLastProgressEmit = now;
+          try {
+            this.chapterOnMsProgress(posMs, durMs);
+          } catch {}
+        }
+        if (status.didJustFinish) {
+          this.finishPlayback(myId);
+        }
+      });
+
+      player.play();
+      if (startMs > 1000) {
+        try {
+          await player.seekTo(startMs / 1000);
+        } catch {}
+      }
+      console.log(`[TTS] Đang phát chapter audio: ${localUri.substring(0, 80)}...`);
+    } catch (err) {
+      console.log('[TTS] playChapterAudio error:', err);
+      this.cleanUp();
+      this.chapterMode = false;
+      if (onError) onError(err);
+    }
+  }
+
+  /** Đang ở chapter-audio mode (phát MP3 nguyên chương) hay sentence mode (Kokoro từng câu). */
+  public isChapterAudioMode(): boolean {
+    return this.chapterMode;
+  }
+
   private chunkUrl(index: number): string {
     const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
     const text = this.sentences[index];
@@ -367,33 +458,67 @@ class TTSService {
     return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
   }
 
-  private chunkFileUri(index: number, myId: number): string {
-    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
-    const cacheDir = (FileSystem.cacheDirectory as string) || '';
-    return `${cacheDir}tts_${myId}_${index}.${ext}`;
+  private audioCacheDir(): string {
+    return `${(FileSystem.cacheDirectory as string) || ''}${AUDIO_CACHE_SUBDIR}`;
   }
 
-  /** Tải 1 câu về máy. Trả về uri file hoặc null nếu lỗi. */
+  private async ensureAudioCacheDir(): Promise<string> {
+    const dir = this.audioCacheDir();
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
+    return dir;
+  }
+
+  /**
+   * Key cache ổn định theo nội dung câu + giọng + tốc độ.
+   * Đổi giọng/tốc độ -> cache miss đúng, không phát nhầm file cũ.
+   */
+  private async cachePathFor(index: number): Promise<{ path: string; ext: string }> {
+    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+    const key = `${this.sentences[index]}|${this.currentVoice.id}|${this.currentSpeed}`;
+    const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
+    return { path: `${this.audioCacheDir()}${hash}.${ext}`, ext };
+  }
+
+  /** Tải 1 câu về máy (dùng cache trên máy nếu có). Trả về uri file hoặc null nếu lỗi. */
   private async fetchChunk(index: number, myId: number): Promise<string | null> {
     if (myId !== this.playbackId) return null;
     if (this.chunkUris[index]) return this.chunkUris[index];
     if (!this.chunkPrefetching[index]) {
       this.chunkPrefetching[index] = (async () => {
         try {
+          const dir = await this.ensureAudioCacheDir();
+          const { path: cachePath, ext } = await this.cachePathFor(index);
+          // Cache hit trên máy -> dùng ngay, không gọi server
+          const hit: any = await FileSystem.getInfoAsync(cachePath).catch(() => null);
+          if (hit && hit.exists) {
+            if (myId !== this.playbackId) return null;
+            this.chunkUris[index] = cachePath;
+            return cachePath;
+          }
+          // Cache miss -> tải về file tạm rồi chuyển vào cache
           const url = this.chunkUrl(index);
-          const localFile = this.chunkFileUri(index, myId);
+          const tmpFile = `${dir}tmp_${myId}_${index}.${ext}`;
           console.log(`[TTS] Đang tải câu ${index + 1}/${this.sentences.length}: ${url.substring(0, 85)}...`);
-          const result = await FileSystem.downloadAsync(url, localFile);
+          const result = await FileSystem.downloadAsync(url, tmpFile);
           if (myId !== this.playbackId) {
-            FileSystem.deleteAsync(localFile, { idempotent: true }).catch(() => {});
+            FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
             return null;
           }
           if (result && result.status === 200) {
             console.log(`[TTS] Câu ${index + 1} tải thành công!`);
-            this.chunkUris[index] = result.uri;
-            return result.uri;
+            const exists: any = await FileSystem.getInfoAsync(cachePath).catch(() => null);
+            if (exists && exists.exists) {
+              await FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
+            } else {
+              await FileSystem.moveAsync({ from: tmpFile, to: cachePath }).catch(() => {});
+            }
+            this.chunkUris[index] = cachePath;
+            // Dọn cache vượt giới hạn (chạy nền, không chặn phát nhạc)
+            this.enforceAudioCacheLimit().catch(() => {});
+            return cachePath;
           }
           console.warn(`[TTS] Câu ${index + 1} tải thất bại, HTTP status: ${result?.status}`);
+          await FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
           return null;
         } catch (err) {
           console.warn(`[TTS] Câu ${index + 1} lỗi mạng:`, err);
@@ -404,6 +529,71 @@ class TTSService {
       })();
     }
     return this.chunkPrefetching[index];
+  }
+
+  /**
+   * Giữ tổng dung lượng cache audio <= giới hạn bằng cách xóa file cũ nhất.
+   * Dùng mtime làm proxy cho LRU (đủ tốt: sách vừa nghe xong luôn có mtime mới nhất).
+   */
+  private audioCacheEnforcing = false;
+
+  private async enforceAudioCacheLimit(): Promise<void> {
+    if (this.audioCacheEnforcing) return;
+    this.audioCacheEnforcing = true;
+    try {
+      const dir = this.audioCacheDir();
+      const files = await FileSystem.readDirectoryAsync(dir).catch(() => [] as string[]);
+      const infos: { name: string; size: number; mtime: number }[] = [];
+      let total = 0;
+      for (const f of files) {
+        if (f.startsWith('tmp_')) continue; // bỏ qua file tạm đang tải dở
+        const info: any = await FileSystem.getInfoAsync(dir + f).catch(() => null);
+        if (info && info.exists && !info.isDirectory) {
+          total += info.size || 0;
+          infos.push({ name: f, size: info.size || 0, mtime: info.modificationTime || 0 });
+        }
+      }
+      if (total > MAX_AUDIO_CACHE_BYTES) {
+        infos.sort((a, b) => a.mtime - b.mtime);
+        for (const fi of infos) {
+          if (total <= MAX_AUDIO_CACHE_BYTES) break;
+          await FileSystem.deleteAsync(dir + fi.name, { idempotent: true }).catch(() => {});
+          total -= fi.size;
+        }
+      }
+    } catch {
+      // cache là tính năng phụ, không được làm hỏng phát nhạc
+    } finally {
+      this.audioCacheEnforcing = false;
+    }
+  }
+
+  /** Dung lượng cache audio hiện tại (bytes) — dùng để hiển thị cho người dùng. */
+  public async getAudioCacheSize(): Promise<number> {
+    try {
+      const dir = this.audioCacheDir();
+      const files = await FileSystem.readDirectoryAsync(dir).catch(() => [] as string[]);
+      let total = 0;
+      for (const f of files) {
+        if (f.startsWith('tmp_')) continue;
+        const info: any = await FileSystem.getInfoAsync(dir + f).catch(() => null);
+        if (info && info.exists && !info.isDirectory) total += info.size || 0;
+      }
+      return total;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Xóa toàn bộ cache audio trên máy. */
+  public async clearAudioCache(): Promise<void> {
+    try {
+      const dir = this.audioCacheDir();
+      const files = await FileSystem.readDirectoryAsync(dir).catch(() => [] as string[]);
+      await Promise.all(
+        files.map(f => FileSystem.deleteAsync(dir + f, { idempotent: true }).catch(() => {}))
+      );
+    } catch {}
   }
 
   /** Nạp gối đầu 2 câu tiếp theo trong lúc câu hiện tại đang phát để buffer luôn đầy. */
@@ -477,12 +667,9 @@ class TTSService {
         if (durMs > 0) this.chunkDurationsMs[index] = durMs;
         this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), status.playing);
         if (status.didJustFinish) {
-          // Zero-waste: xóa ngay file câu vừa đọc xong
-          const finishedUri = this.chunkUris[index];
+          // Giữ file audio trong cache trên máy để nghe lại offline / không tốn server.
+          // (Trước đây xóa ngay sau khi đọc xong — nay giữ lại, LRU tự dọn khi vượt 2GB.)
           this.chunkUris[index] = null;
-          if (finishedUri) {
-            FileSystem.deleteAsync(finishedUri, { idempotent: true }).catch(() => {});
-          }
           try {
             player.remove();
           } catch {}
@@ -518,6 +705,8 @@ class TTSService {
   private finishPlayback(myId: number) {
     if (myId !== this.playbackId) return;
     const total = this.totalEstimatedMs();
+    this.chapterMode = false;
+    this.chapterOnMsProgress = null;
     this.cleanUp();
     this.notifyProgress(total, total, false);
     if (this.speakOnFinish) {
@@ -602,14 +791,13 @@ class TTSService {
 
   public async stop() {
     this.playbackId += 1; // vô hiệu hóa mọi chunk đang tải/phát dở
-    const uris = this.chunkUris.filter(Boolean) as string[];
     this.chunkUris = [];
     this.chunkPrefetching = [];
     this.sentences = [];
-    // Xóa sạch file tạm còn sót
-    for (const uri of uris) {
-      FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-    }
+    this.chapterMode = false;
+    this.chapterOnMsProgress = null;
+    // Không xóa file cache audio nữa — giữ lại trên máy để nghe lại offline,
+    // không phải gọi server synth lại (tiết kiệm credit Modal).
     this.cleanUp();
     if (this.activePlayer) {
       try {
@@ -643,6 +831,15 @@ class TTSService {
   }
 
   public async seekTo(ms: number) {
+    // Chapter-audio mode: tua trực tiếp trên file MP3 nguyên chương
+    if (this.chapterMode && this.isUsingServerAudio && this.activePlayer) {
+      try {
+        await this.activePlayer.seekTo(Math.max(0, ms) / 1000);
+      } catch (e) {
+        console.log('[TTS] seekTo (chapter) error:', e);
+      }
+      return;
+    }
     if (this.isUsingServerAudio && this.sentences.length > 0) {
       // Tìm câu chứa vị trí ms (dựa trên thời lượng đã biết hoặc ước lượng)
       let acc = 0;
