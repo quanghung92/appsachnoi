@@ -52,3 +52,6 @@ __pycache__/
 # OAuth secrets & local credentials
 audioverse_batch/refresh_token.txt
 audioverse_batch/auth_url.txt
+
+# Background music for batch (persisted on Modal Volume)
+audioverse_batch/music/
