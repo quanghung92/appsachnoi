@@ -233,8 +233,9 @@ def download_vieneu_model():
     import os
     import shutil
 
-    import json
     from huggingface_hub import snapshot_download
+
+    import json
 
     # 1. Backbone fp32
     backbone_dir = f"{MODEL_DIR}/vieneu-fp32"
@@ -283,6 +284,11 @@ def download_vieneu_model():
         print("[download] Codec da co, bo qua.")
 
     vieneu_vol.commit()
+
+    print("[test] Kiem tra nap model va doc thu...")
+    test_wav = vieneu_synthesize("Xin chào, đây là AudioVerse.", "Trúc Ly")
+    print(f"[test] Thanh cong! Do dai am thanh test: {len(test_wav)} bytes.")
+
     return {"backbone": backbone_dir, "codec": codec_dir}
 
 
@@ -694,23 +700,6 @@ def resolve_item_text(item: dict) -> str:
     raise RuntimeError("Khong tim thay noi dung chuong (thieu url/text)")
 
 
-def _save_queue_safe(remaining: list, completed_keys: set):
-    """Luu queue an toan: reload file truoc, chi xoa item run nay da xong.
-    Khong bao gio hoi sinh item user da xoa tay (fix bug 11/10)."""
-    current = _load_json(QUEUE_PATH, [])
-    # Giu lai item trong file ma run nay chua xong
-    kept = [it for it in current
-            if f"{it.get('book_id')}/{it.get('chapter_id')}" not in completed_keys]
-    # Them item run nay chua xu ly (nam trong remaining nhung chua co trong file)
-    kept_keys = {f"{it.get('book_id')}/{it.get('chapter_id')}" for it in kept}
-    for it in remaining:
-        k = f"{it.get('book_id')}/{it.get('chapter_id')}"
-        if k not in kept_keys and k not in completed_keys:
-            kept.append(it)
-    _save_json(QUEUE_PATH, kept)
-    vol.commit()
-
-
 def _book_type(book_id: str) -> str:
     """Doan loai sach/truyen tu registry. Mac dinh 'novel' neu co url, 'book' neu khong."""
     books = _load_json(BOOKS_PATH, {})
@@ -720,6 +709,21 @@ def _book_type(book_id: str) -> str:
         return t
     # Fallback: neu book_id co trong books.json cua novel import
     return "book" if info.get("drive_url") else "novel"
+
+
+def _save_queue_safe(remaining: list, completed_keys: set):
+    """Luu queue an toan: reload file truoc, chi xoa item run nay da xong.
+    Khong bao gio hoi sinh item user da xoa tay (fix bug 11/10)."""
+    current = _load_json(QUEUE_PATH, [])
+    kept = [it for it in current
+            if f"{it.get('book_id')}/{it.get('chapter_id')}" not in completed_keys]
+    kept_keys = {f"{it.get('book_id')}/{it.get('chapter_id')}" for it in kept}
+    for it in remaining:
+        k = f"{it.get('book_id')}/{it.get('chapter_id')}"
+        if k not in kept_keys and k not in completed_keys:
+            kept.append(it)
+    _save_json(QUEUE_PATH, kept)
+    vol.commit()
 
 
 def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
@@ -737,15 +741,14 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
 
     done, skipped = 0, 0
     remaining = list(queue)
-    completed_keys = set()  # item run nay da xong -> xoa khoi file
+    completed_keys = set()
 
     for item in list(queue):
-        # Cancel flag: user tao /data/cancel.flag de dung batch giua chung
-        import os as _os
-        if _os.path.exists("/data/cancel.flag"):
+        # Cancel flag
+        if os.path.exists("/data/cancel.flag"):
             print("[batch] Gap cancel.flag - dung batch.")
             try:
-                _os.remove("/data/cancel.flag")
+                os.remove("/data/cancel.flag")
             except Exception:
                 pass
             _save_queue_safe(remaining, completed_keys)
@@ -754,7 +757,6 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
             break
         key = f"{item['book_id']}/{item['chapter_id']}"
         btype = _book_type(item["book_id"])
-        # Giong mac dinh theo loai; bo qua giong cu (kokoro/gemini) con sot trong queue
         _OLD_VOICES = {"duc_an", "diem_trinh", "zubenelgenubi"}
         _v = (item.get("voice") or "").strip()
         if not _v or _v.lower().replace("kokoro_", "") in _OLD_VOICES or _v.lower().startswith("kokoro_"):
@@ -768,7 +770,6 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
             remaining.remove(item)
             completed_keys.add(key)
             skipped += 1
-            _save_queue_safe(remaining, completed_keys)
             continue
 
         print(f"[batch] Gen {key} [vieneu/{voice}]...")
