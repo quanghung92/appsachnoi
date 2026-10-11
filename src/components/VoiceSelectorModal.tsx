@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ActivityIndicator, TextInput, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
 import { VoiceOption } from '../types';
 import { VIETNAMESE_VOICES, ttsService } from '../services/ttsService';
+import { batchService } from '../services/batchService';
 
 interface VoiceSelectorModalProps {
   visible: boolean;
@@ -35,6 +36,46 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
 
   const [isEditingIp, setIsEditingIp] = useState(false);
   const [customIp, setCustomIp] = useState(ttsService.getServerUrl());
+  const [cacheSize, setCacheSize] = useState<number | null>(null);
+  const [clearingCache, setClearingCache] = useState(false);
+  // true: tải audio về máy để nghe lại offline; false: chỉ stream từ Drive
+  const [saveToDevice, setSaveToDevice] = useState(true);
+
+  const loadSaveToDevice = async () => {
+    try {
+      setSaveToDevice(await batchService.getSaveToDevice());
+    } catch {}
+  };
+
+  const handleToggleSaveToDevice = async (value: boolean) => {
+    setSaveToDevice(value);
+    try {
+      await batchService.setSaveToDevice(value);
+    } catch {}
+  };
+
+  const loadCacheSize = async () => {
+    try {
+      setCacheSize(await ttsService.getAudioCacheSize());
+    } catch {
+      setCacheSize(null);
+    }
+  };
+
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      await ttsService.clearAudioCache();
+    } catch {}
+    await loadCacheSize();
+    setClearingCache(false);
+  };
+
+  const formatCacheSize = (bytes: number | null): string => {
+    if (bytes === null || bytes === undefined) return '—';
+    const mb = bytes / (1024 * 1024);
+    return mb < 1024 ? `${mb.toFixed(1)} MB` : `${(mb / 1024).toFixed(2)} GB`;
+  };
 
   const checkConnection = async () => {
     setServerStatus(prev => ({ ...prev, checking: true }));
@@ -78,6 +119,8 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
       const timer = setTimeout(() => {
         setServerType(ttsService.getServerType());
         checkConnection();
+        loadCacheSize();
+        loadSaveToDevice();
       }, 0);
       return () => clearTimeout(timer);
     }
@@ -265,6 +308,44 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                 </TouchableOpacity>
               );
             })}
+          </View>
+
+          {/* Tùy chọn lưu audio về máy hay chỉ stream */}
+          <View style={styles.cacheRow}>
+            <View style={styles.cacheInfo}>
+              <Ionicons name="cloud-download-outline" size={15} color={Colors.textMuted} />
+              <Text style={styles.cacheText}>
+                Lưu audio về máy để nghe lại offline (tắt: chỉ stream từ Drive)
+              </Text>
+            </View>
+            <Switch
+              value={saveToDevice}
+              onValueChange={handleToggleSaveToDevice}
+              trackColor={{ false: Colors.border, true: Colors.primary }}
+              thumbColor={Colors.textLight}
+            />
+          </View>
+
+          {/* Audio cache trên máy */}
+          <View style={styles.cacheRow}>
+            <View style={styles.cacheInfo}>
+              <Ionicons name="save-outline" size={15} color={Colors.textMuted} />
+              <Text style={styles.cacheText}>
+                Audio đã lưu trên máy: {formatCacheSize(cacheSize)} (nghe lại offline, không tốn server)
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={handleClearCache}
+              disabled={clearingCache}
+              style={styles.cacheClearBtn}
+              activeOpacity={0.7}
+            >
+              {clearingCache ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <Text style={styles.cacheClearText}>Xóa</Text>
+              )}
+            </TouchableOpacity>
           </View>
 
           {/* Footer Notice */}
@@ -572,6 +653,42 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+  },
+  cacheRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: Colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  cacheInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    marginRight: 8,
+  },
+  cacheText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  cacheClearBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.borderLight,
+  },
+  cacheClearText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textLight,
   },
   noticeText: {
     fontSize: 10.5,

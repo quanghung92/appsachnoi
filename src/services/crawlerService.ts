@@ -111,6 +111,22 @@ export class CrawlerService {
   /**
    * Đảm bảo chapter có nội dung thật từ nguồn online nếu hiện tại chỉ là mock/sample
    */
+  /**
+   * Dựng URL chương N từ sourceUrl của truyện (pattern chuong-N).
+   * Dùng khi import truyện mới: server sẽ tự cào URL này lúc batch.
+   */
+  public buildChapterUrl(sourceUrl: string | undefined, chapterNumber: number): string {
+    if (!sourceUrl) return '';
+    const cleanSource = sourceUrl.replace(/\/+$/, '');
+    if (cleanSource.includes('wetruyen.com')) {
+      return `${cleanSource}/chuong-${chapterNumber}.html`;
+    } else if (cleanSource.includes('truyenfull')) {
+      const slug = cleanSource.split('/').filter(Boolean).pop();
+      return `https://wetruyen.com/${slug}/chuong-${chapterNumber}.html`;
+    }
+    return `${cleanSource}/chuong-${chapterNumber}/`;
+  }
+
   public async ensureChapterContent(book: Book, chapter: Chapter): Promise<string> {
     // Nếu nội dung đã dài (> 800 ký tự) và không phải text thông báo placeholder -> dùng luôn
     if (
