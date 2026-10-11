@@ -233,9 +233,8 @@ def download_vieneu_model():
     import os
     import shutil
 
-    from huggingface_hub import snapshot_download
-
     import json
+    from huggingface_hub import snapshot_download
 
     # 1. Backbone fp32
     backbone_dir = f"{MODEL_DIR}/vieneu-fp32"
@@ -284,11 +283,6 @@ def download_vieneu_model():
         print("[download] Codec da co, bo qua.")
 
     vieneu_vol.commit()
-
-    print("[test] Kiem tra nap model va doc thu...")
-    test_wav = vieneu_synthesize("Xin chào, đây là AudioVerse.", "Trúc Ly")
-    print(f"[test] Thanh cong! Do dai am thanh test: {len(test_wav)} bytes.")
-
     return {"backbone": backbone_dir, "codec": codec_dir}
 
 
@@ -700,6 +694,23 @@ def resolve_item_text(item: dict) -> str:
     raise RuntimeError("Khong tim thay noi dung chuong (thieu url/text)")
 
 
+def _save_queue_safe(remaining: list, completed_keys: set):
+    """Luu queue an toan: reload file truoc, chi xoa item run nay da xong.
+    Khong bao gio hoi sinh item user da xoa tay (fix bug 11/10)."""
+    current = _load_json(QUEUE_PATH, [])
+    # Giu lai item trong file ma run nay chua xong
+    kept = [it for it in current
+            if f"{it.get('book_id')}/{it.get('chapter_id')}" not in completed_keys]
+    # Them item run nay chua xu ly (nam trong remaining nhung chua co trong file)
+    kept_keys = {f"{it.get('book_id')}/{it.get('chapter_id')}" for it in kept}
+    for it in remaining:
+        k = f"{it.get('book_id')}/{it.get('chapter_id')}"
+        if k not in kept_keys and k not in completed_keys:
+            kept.append(it)
+    _save_json(QUEUE_PATH, kept)
+    vol.commit()
+
+
 def _book_type(book_id: str) -> str:
     """Doan loai sach/truyen tu registry. Mac dinh 'novel' neu co url, 'book' neu khong."""
     books = _load_json(BOOKS_PATH, {})
@@ -726,19 +737,38 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
 
     done, skipped = 0, 0
     remaining = list(queue)
+    completed_keys = set()  # item run nay da xong -> xoa khoi file
 
     for item in list(queue):
+        # Cancel flag: user tao /data/cancel.flag de dung batch giua chung
+        import os as _os
+        if _os.path.exists("/data/cancel.flag"):
+            print("[batch] Gap cancel.flag - dung batch.")
+            try:
+                _os.remove("/data/cancel.flag")
+            except Exception:
+                pass
+            _save_queue_safe(remaining, completed_keys)
+            break
         if done >= max_items:
             break
         key = f"{item['book_id']}/{item['chapter_id']}"
         btype = _book_type(item["book_id"])
-        voice = item.get("voice") or (VIENEU_VOICE_NOVEL if btype == "novel" else VIENEU_VOICE_BOOK)
+        # Giong mac dinh theo loai; bo qua giong cu (kokoro/gemini) con sot trong queue
+        _OLD_VOICES = {"duc_an", "diem_trinh", "zubenelgenubi"}
+        _v = (item.get("voice") or "").strip()
+        if not _v or _v.lower().replace("kokoro_", "") in _OLD_VOICES or _v.lower().startswith("kokoro_"):
+            voice = VIENEU_VOICE_NOVEL if btype == "novel" else VIENEU_VOICE_BOOK
+        else:
+            voice = _v
 
         # Da co audio dung giong -> bo qua
         existing = index.get(key)
         if existing and existing.get("voice") == voice and existing.get("engine") == "vieneu":
             remaining.remove(item)
+            completed_keys.add(key)
             skipped += 1
+            _save_queue_safe(remaining, completed_keys)
             continue
 
         print(f"[batch] Gen {key} [vieneu/{voice}]...")
@@ -747,6 +777,7 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
         except Exception as e:
             print(f"[batch] Khong lay duoc text {key}: {e}")
             remaining.remove(item)
+            completed_keys.add(key)
             continue
 
         try:
@@ -770,6 +801,7 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
         except Exception as e:
             print(f"[batch] Loi synth {key}: {e}")
             remaining.remove(item)
+            completed_keys.add(key)
             continue
 
         # Tron nhac nen (tu dong)
@@ -790,6 +822,7 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
         except Exception as e:
             print(f"[batch] Loi convert MP3 {key}: {e}")
             remaining.remove(item)
+            completed_keys.add(key)
             continue
 
         # Xoa file Drive cu neu gen lai (doi giong)
@@ -818,9 +851,10 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
             "chapter_id": item["chapter_id"],
         }
         remaining.remove(item)
+        completed_keys.add(key)
         done += 1
         print(f"[batch] Xong {key} ({len(mp3) // 1024} KB).")
-        _save_json(QUEUE_PATH, remaining)
+        _save_queue_safe(remaining, completed_keys)
         _save_json(INDEX_PATH, index)
         vol.commit()
 
@@ -919,6 +953,16 @@ def api():
         vol.commit()
         return {"removed": before - len(queue)}
 
+    @web_app.post("/cancel")
+    def cancel_batch():
+        """Dung batch dang chay (graceful - xong chuong hien tai roi dung)."""
+        import os
+
+        with open("/data/cancel.flag", "w") as f:
+            f.write("cancel")
+        vol.commit()
+        return {"cancel_requested": True}
+
     @web_app.post("/import_book")
     def import_book(payload: dict):
         """Nhap sach PDF tu link Drive: tai -> extract -> tach chuong -> luu Volume."""
@@ -1008,7 +1052,12 @@ def api():
             if (book_id, chapter_id) in have:
                 continue
             engine = it.get("engine", "vieneu")
-            voice = it.get("voice") or VIENEU_VOICE_NOVEL
+            _v = (it.get("voice") or "").strip()
+            _OLD = {"duc_an", "diem_trinh", "zubenelgenubi"}
+            if not _v or _v.lower().replace("kokoro_", "") in _OLD or _v.lower().startswith("kokoro_"):
+                voice = VIENEU_VOICE_NOVEL
+            else:
+                voice = _v
             existing = index.get(f"{book_id}/{chapter_id}")
             if existing and existing.get("engine") == engine and existing.get("voice") == voice:
                 continue
