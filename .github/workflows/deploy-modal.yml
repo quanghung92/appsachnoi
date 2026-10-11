@@ -1,6 +1,11 @@
 name: Deploy Modal Batch
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'audioverse_batch/**'
+      - '.github/workflows/deploy-modal.yml'
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -16,3 +21,4 @@ jobs:
         run: |
           cd audioverse_batch
           modal deploy modal_batch_kokoro.py
+
