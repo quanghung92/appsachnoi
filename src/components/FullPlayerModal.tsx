@@ -33,6 +33,7 @@ interface FullPlayerModalProps {
   onOpenVoiceSelector: () => void;
   onOpenChapterList: () => void;
   onOpenSleepTimer: () => void;
+  onOpenBatchQueue: () => void;
 }
 
 const { width } = Dimensions.get('window');
@@ -56,6 +57,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   onOpenVoiceSelector,
   onOpenChapterList,
   onOpenSleepTimer,
+  onOpenBatchQueue,
 }) => {
   const [showTextReader, setShowTextReader] = useState<boolean>(false);
 
@@ -242,6 +244,12 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
           <TouchableOpacity style={styles.bottomAction} onPress={onOpenChapterList}>
             <Ionicons name="list" size={20} color={Colors.textSecondary} />
             <Text style={styles.bottomActionLabel}>Mục lục</Text>
+          </TouchableOpacity>
+
+          {/* Batch Queue */}
+          <TouchableOpacity style={styles.bottomAction} onPress={onOpenBatchQueue}>
+            <Ionicons name="cloud-upload-outline" size={20} color={Colors.textSecondary} />
+            <Text style={styles.bottomActionLabel}>Hàng đợi</Text>
           </TouchableOpacity>
         </View>
       </View>

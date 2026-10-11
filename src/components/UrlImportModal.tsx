@@ -13,7 +13,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { Colors } from '../theme/colors';
 import { crawlerService } from '../services/crawlerService';
-import { Book } from '../types';
+import { batchService } from '../services/batchService';
+import { Book, Chapter } from '../types';
+
+const isDriveLink = (url: string) => /drive\.google\.com/i.test(url);
+const isNovelLink = (url: string) =>
+  /truyenfull|tangthuvien|dtruyen|metruyenchu|metruyencv|wetruyen/i.test(url);
 
 interface UrlImportModalProps {
   visible: boolean;
@@ -30,22 +35,94 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
 
   const handleImportUrl = async (playImmediately: boolean) => {
-    if (!url.trim()) {
+    const trimmed = url.trim();
+    if (!trimmed) {
       Alert.alert('Chưa nhập liên kết', 'Vui lòng dán link Google Drive, web truyện hoặc bài viết cần đọc.');
       return;
     }
 
     setIsLoading(true);
     try {
-      const book = await crawlerService.parseUrl(url);
-      setIsLoading(false);
-      setUrl('');
-      onBookImported(book, playImmediately);
-      onClose();
+      // Kiến trúc batch: server tự tải PDF / cào truyện, tách chương, lưu text.
+      // App chỉ nhận metadata chương; audio do server gen ban đêm -> Drive.
+      if (batchService.isConfigured() && (isDriveLink(trimmed) || isNovelLink(trimmed))) {
+        const book = await importViaBatch(trimmed);
+        if (!book) {
+          throw new Error('batch import failed');
+        }
+        finishImport(book, playImmediately);
+        return;
+      }
+      // Chưa có batch server: luồng cũ (cào trên máy / nội dung mẫu).
+      const book = await crawlerService.parseUrl(trimmed);
+      finishImport(book, playImmediately);
     } catch (err) {
       setIsLoading(false);
       Alert.alert('Lỗi phân tích', 'Không thể bóc tách nội dung từ đường dẫn này. Vui lòng kiểm tra lại liên kết.');
     }
+  };
+
+  const finishImport = (book: Book, playImmediately: boolean) => {
+    setIsLoading(false);
+    setUrl('');
+    onBookImported(book, playImmediately);
+    onClose();
+  };
+
+  /**
+   * Nhập sách/truyện qua batch server:
+   *  - Link Drive (PDF) -> /import_book: server tải PDF, extract, tách chương.
+   *  - Link truyện web -> /import_novel: server cào thử lấy tên truyện;
+   *    app tự sinh URL các chương theo pattern (server cào lúc batch).
+   */
+  const importViaBatch = async (link: string): Promise<Book | null> => {
+    if (isDriveLink(link)) {
+      const result = await batchService.importBook(link);
+      if (!result || result.chapters.length === 0) return null;
+      const chapters: Chapter[] = result.chapters.map((c, i) => ({
+        id: c.id,
+        chapterNumber: i + 1,
+        title: c.title,
+        content: '', // text nằm trên server, audio lấy từ Drive
+      }));
+      return {
+        id: result.book_id,
+        title: result.title,
+        author: 'Sách PDF',
+        category: 'Sách',
+        description: `${chapters.length} chương — audio do server gen ban đêm.`,
+        coverUrl: '',
+        driveUrl: link,
+        type: 'drive_book',
+        chapters,
+      };
+    }
+    // Truyện web
+    const result = await batchService.importNovel(link);
+    if (!result) return null;
+    const cleanSource = link.replace(/\/+$/, '');
+    const chapters: Chapter[] = [];
+    const TOTAL = 1500; // số chương tối đa hiển thị; vượt quá báo khi cào lỗi
+    for (let n = 1; n <= TOTAL; n++) {
+      chapters.push({
+        id: `${result.book_id}_c${n}`,
+        chapterNumber: n,
+        title: `Chương ${n}`,
+        url: crawlerService.buildChapterUrl(cleanSource, n),
+        content: '',
+      });
+    }
+    return {
+      id: result.book_id,
+      title: result.title,
+      author: 'Truyện Web',
+      category: 'Truyện Chữ',
+      description: `${result.sample_chapter} — audio do server gen ban đêm.`,
+      coverUrl: '',
+      sourceUrl: link,
+      type: 'web_novel',
+      chapters,
+    };
   };
 
   const handlePickDocument = async () => {

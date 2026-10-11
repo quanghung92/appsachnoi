@@ -8,6 +8,10 @@ interface ChapterListModalProps {
   visible: boolean;
   book: Book | null;
   currentChapter: Chapter | null;
+  /** Chương đã có audio gen sẵn trên batch server (đồng bộ từ server). */
+  readyChapterIds?: Set<string>;
+  /** Chương đang nằm trong hàng đợi gen trên server. */
+  pendingChapterIds?: Set<string>;
   onClose: () => void;
   onSelectChapter: (chapter: Chapter) => void;
 }
@@ -16,6 +20,8 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
   visible,
   book,
   currentChapter,
+  readyChapterIds,
+  pendingChapterIds,
   onClose,
   onSelectChapter,
 }) => {
@@ -41,6 +47,8 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
             contentContainerStyle={styles.list}
             renderItem={({ item, index }) => {
               const isSelected = currentChapter?.id === item.id;
+              const hasAudio = readyChapterIds?.has(item.id) ?? false;
+              const isPending = !hasAudio && (pendingChapterIds?.has(item.id) ?? false);
               return (
                 <TouchableOpacity
                   style={[styles.item, isSelected && styles.selectedItem]}
@@ -62,6 +70,12 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
                       </Text>
                       {item.duration && (
                         <Text style={styles.durationText}>{item.duration}</Text>
+                      )}
+                      {hasAudio && (
+                        <Text style={styles.audioReadyText}>✓ Có audio giọng Gemini</Text>
+                      )}
+                      {isPending && (
+                        <Text style={styles.audioPendingText}>⏳ Đang chờ gen audio</Text>
                       )}
                     </View>
                   </View>
@@ -154,6 +168,17 @@ const styles = StyleSheet.create({
   },
   durationText: {
     fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 3,
+  },
+  audioReadyText: {
+    fontSize: 10.5,
+    color: Colors.primary,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  audioPendingText: {
+    fontSize: 10.5,
     color: Colors.textMuted,
     marginTop: 3,
   },
