@@ -3,8 +3,7 @@ import sys
 import asyncio
 import soundfile as sf
 import edge_tts
-from kokoro_vietnamese.onnx_cli import KokoroVietnameseONNX
-import kokoro_vietnamese.core as c
+from vieneu import Vieneu
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -19,24 +18,27 @@ async def generate_edge(voice_name, filename):
 
 def main():
     print("=" * 60)
-    print("🎙️ ĐANG TẠO FILE NGHE THỬ CHO TẤT CẢ 16 GIỌNG ĐỌC AI")
+    print("🎙️ ĐANG TẠO FILE NGHE THỬ CHO CÁC GIỌNG ĐỌC AI VIENEU-TTS & EDGE")
     print("=" * 60)
 
-    # 1. 14 Giọng Kokoro Vietnamese
-    for voice_id, info in c.VOICES.items():
-        label = info.get('label', voice_id)
-        out_path = os.path.join(OUT_DIR, f"kokoro_{voice_id}.wav")
+    vieneu = Vieneu()
+    preset_voices = vieneu.list_preset_voices()
+
+    # 1. Các giọng VieNeu-TTS
+    for label, voice_id in preset_voices:
+        # Chuẩn hóa tên file: ví dụ vieneu_truc_ly.wav
+        safe_name = voice_id.lower().replace(" ", "_")
+        out_path = os.path.join(OUT_DIR, f"vieneu_{safe_name}.wav")
         if not os.path.exists(out_path):
-            print(f"[Kokoro] Đang tạo: {voice_id} ({label})...")
+            print(f"[VieNeu] Đang tạo: {voice_id} ({label})...")
             try:
-                model = KokoroVietnameseONNX(voice=voice_id, device='cpu')
-                audio, _ = model.synthesize(SAMPLE_TEXT, speed=1.0)
-                sf.write(out_path, audio, 24000)
+                audio = vieneu.infer(SAMPLE_TEXT, voice=voice_id)
+                sf.write(out_path, audio, 48000)
                 print(f" -> Xong {voice_id} ({os.path.getsize(out_path):,} bytes)")
             except Exception as e:
                 print(f" -> Lỗi {voice_id}: {e}")
         else:
-            print(f"[Kokoro] Đã có sẵn: {voice_id}")
+            print(f"[VieNeu] Đã có sẵn: {voice_id}")
 
     # 2. 2 Giọng Edge Neural
     edge_voices = [

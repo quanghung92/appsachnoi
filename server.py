@@ -4,9 +4,10 @@ import os
 import sys
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import shutil
+from pathlib import Path
 import soundfile as sf
 import edge_tts
-from kokoro_vietnamese.onnx_cli import KokoroVietnameseONNX
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -17,18 +18,87 @@ except ImportError:
     BeautifulSoup = None
     HAS_BS4 = False
 
+try:
+    import librosa
+    HAS_LIBROSA = True
+except ImportError:
+    HAS_LIBROSA = False
+
 PORT = int(os.environ.get("PORT", 3000))
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "audio_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Cache initialized Kokoro voice models in memory for fast synthesis
-kokoro_instances = {}
+def resolve_hf_symlinks():
+    """Tự động xử lý symlink cache HuggingFace trên Windows cho ONNX Runtime."""
+    try:
+        hub_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        if not hub_dir.exists():
+            return
+        for repo_dir in hub_dir.iterdir():
+            if not repo_dir.is_dir():
+                continue
+            name = repo_dir.name.lower()
+            if "vieneu" in name or "moss" in name:
+                snapshots = repo_dir / "snapshots"
+                if snapshots.exists():
+                    for f in list(snapshots.rglob("*")):
+                        if f.is_symlink():
+                            target = f.resolve()
+                            f.unlink()
+                            shutil.copyfile(target, f)
+    except Exception as e:
+        print(f"[Server] Symlink check notice: {e}")
 
-def get_kokoro_model(voice_id: str):
-    if voice_id not in kokoro_instances:
-        print(f"[Server] Loading Kokoro model for voice: {voice_id}...")
-        kokoro_instances[voice_id] = KokoroVietnameseONNX(voice=voice_id, device="cpu")
-    return kokoro_instances[voice_id]
+# Mapping giọng VieNeu
+VIENEU_VOICE_MAP = {
+    "vieneu_truc_ly": "Trúc Ly",
+    "vieneu_thien_minh": "Thiện Minh",
+    "vieneu_hai_dang": "Hải Đăng",
+    "vieneu_mai_anh": "Mai Anh",
+    "vieneu_thuy_dung": "Thùy Dung",
+    "vieneu_thai_son": "Thái Sơn",
+    "vieneu_ngoc_tran": "Ngọc Trân",
+    "vieneu_quang_son": "Quang Sơn",
+    "vieneu_adam_bua": "Adam bựa",
+    "vieneu_adam": "Adam",
+    "vieneu_ngoc_huyen": "Ngọc Huyền",
+    "vieneu_thien_tam_duc": "Thiền Tâm Đức",
+    "vieneu_minh_duc": "Minh Đức",
+    "vieneu_pham_tuyen": "Phạm Tuyên",
+    "vieneu_xuan_vinh": "Xuân Vĩnh",
+    "vieneu_thanh_binh": "Thanh Bình",
+    "vieneu_ngoc_linh": "Ngọc Linh",
+    "vieneu_doan_trang": "Đoan Trang",
+    "vieneu_thuc_doan": "Thục Đoan",
+    "vieneu_minh_triet": "Minh Triết",
+    "vieneu_my_duyen": "Mỹ Duyên",
+    "vieneu_quynh_anh": "Quỳnh Anh",
+    "vieneu_duc_tri": "Đức Trí",
+    "vieneu_kim_thanh": "Kim Thanh",
+    "vieneu_quoc_tuan": "Quốc Tuấn",
+    # Ánh xạ dự phòng nếu thiết bị còn lưu ID cũ từ Kokoro
+    "kokoro_storyvert": "Trúc Ly",
+    "kokoro_diem_trinh": "Mai Anh",
+    "kokoro_hung_thinh": "Thiện Minh",
+}
+
+# Khởi tạo mô hình VieNeu-TTS
+vieneu_instance = None
+
+def get_vieneu_model():
+    global vieneu_instance
+    if vieneu_instance is None:
+        print("[Server] Đang nạp mô hình VieNeu-TTS 48kHz...")
+        resolve_hf_symlinks()
+        from vieneu import Vieneu
+        try:
+            vieneu_instance = Vieneu()
+        except Exception as e:
+            print(f"[Server] Thử khắc phục symlink ONNX và nạp lại: {e}")
+            resolve_hf_symlinks()
+            vieneu_instance = Vieneu()
+        print("[Server] Đã nạp thành công VieNeu-TTS!")
+    return vieneu_instance
 
 SAMPLES_DIR = os.path.join(os.path.dirname(__file__), "audio_samples")
 AUDITION_HTML = os.path.join(os.path.dirname(__file__), "audition.html")
@@ -249,7 +319,7 @@ class TTSHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
-                self.wfile.write(b'{"status":"ok","engine":"kokoro+edge","voices":["kokoro_storyvert","kokoro_diem_trinh","kokoro_hung_thinh","vi-VN-HoaiMyNeural","vi-VN-NamMinhNeural"]}')
+                self.wfile.write(b'{"status":"ok","engine":"vieneu+edge","voices":["vieneu_truc_ly","vieneu_thien_minh","vieneu_hai_dang","vieneu_mai_anh","vieneu_thuy_dung","vieneu_thai_son","vieneu_ngoc_tran","vieneu_quang_son","vi-VN-HoaiMyNeural","vi-VN-NamMinhNeural"]}')
                 return
 
             if parsed.path == "/api/crawl":
@@ -274,7 +344,7 @@ class TTSHandler(BaseHTTPRequestHandler):
             if parsed.path in ["/tts", "/tts.wav", "/tts.mp3"]:
                 query = urllib.parse.parse_qs(parsed.query)
                 text = query.get("text", [""])[0]
-                voice = query.get("voice", ["kokoro_storyvert"])[0]
+                voice = query.get("voice", ["vieneu_truc_ly"])[0]
                 speed_str = query.get("speed", ["1.0"])[0]
 
                 try:
@@ -322,7 +392,7 @@ class TTSHandler(BaseHTTPRequestHandler):
                 import json
                 data = json.loads(post_body)
                 text = data.get("text", "")
-                voice = data.get("voice", "kokoro_storyvert")
+                voice = data.get("voice", "vieneu_truc_ly")
                 speed = float(data.get("speed", 1.0))
                 self.process_tts(text, voice, speed)
             else:
@@ -340,23 +410,25 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Missing text parameter")
             return
 
-        is_kokoro = voice.startswith("kokoro_")
-        ext = "wav" if is_kokoro else "mp3"
-        content_type = "audio/wav" if is_kokoro else "audio/mpeg"
+        is_edge = voice.startswith("vi-VN-")
+        ext = "mp3" if is_edge else "wav"
+        content_type = "audio/mpeg" if is_edge else "audio/wav"
 
         cache_key = hashlib.md5(f"{text}_{voice}_{speed}".encode("utf-8")).hexdigest()
         cache_path = os.path.join(CACHE_DIR, f"{cache_key}.{ext}")
 
         if not os.path.exists(cache_path):
-            if is_kokoro:
-                kokoro_voice_name = voice.replace("kokoro_", "")
-                print(f"[Server] Synthesizing Kokoro ({kokoro_voice_name}): {text[:40]}...")
-                model = get_kokoro_model(kokoro_voice_name)
-                audio_data, _ = model.synthesize(text, speed=speed)
-                sf.write(cache_path, audio_data, 24000)
-            else:
+            if is_edge:
                 print(f"[Server] Synthesizing Edge-TTS ({voice}): {text[:40]}...")
                 asyncio.run(self.generate_edge_audio(text, voice, cache_path))
+            else:
+                vieneu_voice_name = VIENEU_VOICE_MAP.get(voice, voice)
+                print(f"[Server] Synthesizing VieNeu-TTS 48kHz ({vieneu_voice_name}): {text[:40]}...")
+                model = get_vieneu_model()
+                audio_data = model.infer(text, voice=vieneu_voice_name)
+                if speed != 1.0 and HAS_LIBROSA:
+                    audio_data = librosa.effects.time_stretch(audio_data, rate=speed)
+                sf.write(cache_path, audio_data, 48000)
 
         if os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
@@ -389,10 +461,15 @@ def run():
     except Exception:
         lan_ip = "?"
     print("======================================================")
-    print(f"🎧 AudioVerse Dual TTS Server (Kokoro + Edge-TTS)")
+    print(f"🎧 AudioVerse Dual TTS Server (VieNeu-TTS 48kHz + Edge-TTS)")
     print(f"👉 Local Endpoint: http://localhost:{PORT}/tts")
     print(f"👉 Wi-Fi Endpoint: http://{lan_ip}:{PORT}/tts")
     print("======================================================")
+    # Tải trước model để lượt đọc đầu tiên không bị delay
+    try:
+        get_vieneu_model()
+    except Exception as e:
+        print(f"[Server] Cảnh báo nạp trước model: {e}")
     httpd.serve_forever()
 
 if __name__ == "__main__":

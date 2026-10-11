@@ -517,8 +517,8 @@ export default function App() {
   };
 
   const handleTestVoice = (voice: VoiceOption) => {
+    setCurrentVoice(voice);
     ttsService.setVoice(voice);
-    ttsService.speak(voice.sampleText);
   };
 
   const handleSetSleepTimer = (minutes: number | null) => {

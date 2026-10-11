@@ -88,7 +88,7 @@ export class CrawlerService {
    */
   public async crawlChapter(url: string): Promise<CrawlResult | null> {
     const trimmed = url.trim();
-    // 1. Thử qua server Kokoro (Local PC hoặc Modal Cloud)
+    // 1. Thử qua server TTS (Local PC hoặc Cloud)
     try {
       const baseUrl = ttsService.getServerUrl();
       const apiUrl = `${baseUrl}/api/crawl?url=${encodeURIComponent(trimmed)}`;

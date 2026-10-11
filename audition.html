@@ -293,8 +293,8 @@
   <div class="container">
     <header>
       <div class="badge-top">🎙️ Phòng Tuyển Chọn Giọng Đọc AI</div>
-      <h1>Nghe Thử Tất Cả 16 Giọng Đọc</h1>
-      <p class="lead">Lắng nghe ngữ điệu thực tế của từng giọng đọc (14 giọng Kokoro Vietnamese Offline + 2 giọng Microsoft Edge). Bạn có thể bấm nghe câu mẫu sẵn có hoặc nhập câu văn tùy ý!</p>
+      <h1>Nghe Thử Tuyển Chọn Giọng Đọc AI VieNeu-TTS 48kHz</h1>
+      <p class="lead">Lắng nghe ngữ điệu thực tế của từng giọng đọc chất lượng phòng thu (VieNeu-TTS 48kHz On-device &amp; Microsoft Edge Neural). Bạn có thể bấm nghe câu mẫu sẵn có hoặc nhập câu văn tùy ý!</p>
     </header>
 
     <!-- Custom test text box -->
@@ -320,31 +320,31 @@
     </div>
 
     <div class="footer">
-      AudioVerse Dual TTS Engine • Kokoro-Vietnamese ONNX 82M & Microsoft Edge Neural
+      AudioVerse Dual TTS Engine • VieNeu-TTS 48kHz &amp; Microsoft Edge Neural
     </div>
   </div>
 
   <script>
     const VOICES_DATA = [
-      { id: 'kokoro_storyvert', name: 'Storyvert', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_storyvert.wav', desc: 'Giọng đọc đêm khuya thì thầm, truyền cảm, bí ẩn (Cực hợp truyện ma & tiểu thuyết)' },
-      { id: 'kokoro_diem_trinh', name: 'Diễm Trinh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_diem_trinh.wav', desc: 'Giọng nữ trong trẻo, nhẹ nhàng, thanh thoát (Hợp tản văn & sách phát triển bản thân)' },
-      { id: 'kokoro_hung_thinh', name: 'Hưng Thịnh', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_hung_thinh.wav', desc: 'Giọng nam trầm ấm, hào hùng, đĩnh đạc (Hợp truyện kiếm hiệp & lịch sử)' },
-      { id: 'kokoro_mai_linh', name: 'Mai Linh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_mai_linh.wav', desc: 'Giọng nữ trẻ trung, hoạt bát, ngữ điệu vui tươi và tự nhiên' },
-      { id: 'kokoro_mai_loan', name: 'Mai Loan', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_mai_loan.wav', desc: 'Giọng nữ đằm thắm, chững chạc, giàu cảm xúc lắng đọng' },
-      { id: 'kokoro_manh_dung', name: 'Mạnh Dũng', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_manh_dung.wav', desc: 'Giọng nam mạnh mẽ, dứt khoát, khí phách kiên cường' },
-      { id: 'kokoro_my_yen', name: 'Mỹ Yến', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_my_yen.wav', desc: 'Giọng nữ ngọt ngào, ấm áp, truyền cảm hứng dịu dàng' },
-      { id: 'kokoro_ngoc_huyen', name: 'Ngọc Huyền', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_ngoc_huyen.wav', desc: 'Giọng nữ thanh lịch, phát âm chuẩn mực, rõ ràng từng âm tiết' },
-      { id: 'kokoro_phat_tai', name: 'Phát Tài', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_phat_tai.wav', desc: 'Giọng nam dày dặn, sang sảng, ấm áp và gần gũi' },
-      { id: 'kokoro_thanh_dat', name: 'Thành Đạt', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_thanh_dat.wav', desc: 'Giọng nam thanh niên hiện đại, đĩnh đạc, rõ ràng' },
-      { id: 'kokoro_thuc_trinh', name: 'Thục Trinh', gender: 'Nữ', engine: 'kokoro', sampleFile: 'kokoro_thuc_trinh.wav', desc: 'Giọng nữ đoan trang, dịu nhẹ, âm sắc êm tai khi nghe lâu' },
-      { id: 'kokoro_tuan_ngoc', name: 'Tuấn Ngọc', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_tuan_ngoc.wav', desc: 'Giọng nam truyền cảm, phong thái quý ông trầm ấm' },
-      { id: 'kokoro_duc_an', name: 'Đức An', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_duc_an.wav', desc: 'Giọng nam bình dị, mộc mạc, gần gũi như người kể chuyện' },
-      { id: 'kokoro_duc_duy', name: 'Đức Duy', gender: 'Nam', engine: 'kokoro', sampleFile: 'kokoro_duc_duy.wav', desc: 'Giọng nam dõng dạc, nội lực tốt, tốc độ đọc vừa phải' },
+      { id: 'vieneu_truc_ly', name: 'Trúc Ly', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_trúc_ly.wav', desc: 'Giọng nữ Bắc trong trẻo, mượt mà, cảm xúc tự nhiên (Đỉnh cao tiểu thuyết & truyện đêm khuya)' },
+      { id: 'vieneu_thien_minh', name: 'Thiện Minh', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_thiện_minh.wav', desc: 'Giọng nam Bắc trầm ấm, hào hùng, phong cách kể chuyện cuốn hút (Cực hợp tiên hiệp & lịch sử)' },
+      { id: 'vieneu_hai_dang', name: 'Hải Đăng', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_hải_đăng.wav', desc: 'Giọng nam Bắc thanh niên hiện đại, đĩnh đạc, ngữ điệu tự nhiên như trò chuyện' },
+      { id: 'vieneu_mai_anh', name: 'Mai Anh', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_mai_anh.wav', desc: 'Giọng nữ Bắc dõng dạc, phát âm chuẩn (Phù hợp sách kỹ năng, tin tức & tản văn)' },
+      { id: 'vieneu_thuy_dung', name: 'Thùy Dung', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_thùy_dung.wav', desc: 'Giọng nữ Nam Bộ ngọt ngào, dịu dàng, êm tai khi nghe thời gian dài' },
+      { id: 'vieneu_thai_son', name: 'Thái Sơn', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_thái_sơn.wav', desc: 'Giọng nam Nam Bộ ấm áp, mộc mạc, đậm chất kể chuyện phương Nam' },
+      { id: 'vieneu_ngoc_tran', name: 'Ngọc Trân', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_ngọc_trân.wav', desc: 'Giọng nữ miền Trung đằm thắm, truyền cảm, sâu lắng và thanh thoát' },
+      { id: 'vieneu_quang_son', name: 'Quang Sơn', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_quang_sơn.wav', desc: 'Giọng nam miền Trung hào sảng, chân chất, phong cách kể chuyện tự nhiên' },
+      { id: 'vieneu_adam_bua', name: 'Adam bựa', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_adam_bựa.wav', desc: 'Giọng nam Bắc cá tính, tự nhiên, hài hước và sinh động' },
+      { id: 'vieneu_ngoc_huyen', name: 'Ngọc Huyền', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_ngọc_huyền.wav', desc: 'Giọng nữ Bắc đằm thắm, chững chạc, giàu cảm xúc lắng đọng' },
+      { id: 'vieneu_pham_tuyen', name: 'Phạm Tuyên', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_phạm_tuyên.wav', desc: 'Giọng nam Bắc dày dặn, sang sảng, ấm áp và gần gũi' },
+      { id: 'vieneu_my_duyen', name: 'Mỹ Duyên', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_mỹ_duyên.wav', desc: 'Giọng nữ Nam Bộ truyền cảm hứng, phong cách đọc truyện ngọt ngào' },
+      { id: 'vieneu_quynh_anh', name: 'Quỳnh Anh', gender: 'Nữ', engine: 'vieneu', sampleFile: 'vieneu_quỳnh_anh.wav', desc: 'Giọng nữ Bắc đoan trang, dịu nhẹ, chuyên đọc truyện tâm lý & văn học' },
+      { id: 'vieneu_duc_tri', name: 'Đức Trí', gender: 'Nam', engine: 'vieneu', sampleFile: 'vieneu_đức_trí.wav', desc: 'Giọng nam Nam Bộ đĩnh đạc, nội lực tốt, tiết tấu vừa vặn' },
       { id: 'vi-VN-HoaiMyNeural', name: 'Hoài My', gender: 'Nữ', engine: 'edge', sampleFile: 'edge_hoai_my.mp3', desc: 'Phát thanh viên nữ Microsoft Edge, luyến láy chuẩn phòng thu' },
       { id: 'vi-VN-NamMinhNeural', name: 'Nam Minh', gender: 'Nam', engine: 'edge', sampleFile: 'edge_nam_minh.mp3', desc: 'Phát thanh viên nam Microsoft Edge, đĩnh đạc, chuyên nghiệp' }
     ];
 
-    let selectedVoices = new Set(['kokoro_storyvert', 'kokoro_diem_trinh', 'kokoro_hung_thinh', 'vi-VN-HoaiMyNeural', 'vi-VN-NamMinhNeural']);
+    let selectedVoices = new Set(['vieneu_truc_ly', 'vieneu_thien_minh', 'vieneu_hai_dang', 'vieneu_mai_anh', 'vi-VN-HoaiMyNeural', 'vi-VN-NamMinhNeural']);
 
     function renderGrid() {
       const grid = document.getElementById('voiceGrid');
@@ -352,8 +352,8 @@
         const isSelected = selectedVoices.has(v.id);
         const avatarClass = v.gender === 'Nữ' ? 'avatar-female' : 'avatar-male';
         const avatarLetter = v.name[0];
-        const tagEngineClass = v.engine === 'kokoro' ? 'tag-kokoro' : 'tag-edge';
-        const tagEngineLabel = v.engine === 'kokoro' ? 'Kokoro AI' : 'Edge Cloud';
+        const tagEngineClass = v.engine === 'vieneu' ? 'tag-kokoro' : 'tag-edge';
+        const tagEngineLabel = v.engine === 'vieneu' ? 'VieNeu-TTS 48k' : 'Edge Cloud';
 
         return `
           <div class="voice-card ${isSelected ? 'selected' : ''}" id="card_${v.id}">

@@ -13,28 +13,68 @@ const MAX_AUDIO_CACHE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export const VIETNAMESE_VOICES: VoiceOption[] = [
   {
-    id: 'kokoro_storyvert',
-    name: 'Storyvert (Kokoro AI)',
+    id: 'vieneu_truc_ly',
+    name: 'Trúc Ly (VieNeu AI)',
     gender: 'female',
     locale: 'vi-VN',
-    description: 'Chuyên đọc truyện đêm khuya, tiểu thuyết & truyện chữ (Giọng offline siêu nhẹ)',
+    description: 'Giọng nữ Bắc trong trẻo, mượt mà, cảm xúc tự nhiên (Đỉnh cao đọc tiểu thuyết & truyện dài)',
     sampleText: 'Đêm đã về khuya, gió rít qua khe cửa sổ. Tiếng bước chân khe khẽ vang lên trên hành lang vắng lặng.'
   },
   {
-    id: 'kokoro_diem_trinh',
-    name: 'Diễm Trinh (Kokoro AI)',
-    gender: 'female',
-    locale: 'vi-VN',
-    description: 'Giọng nữ trong trẻo, nhẹ nhàng, điềm tĩnh (Phù hợp tản văn & sách kỹ năng)',
-    sampleText: 'Chào bạn, tôi là Diễm Trinh, giọng đọc AI tự nhiên của Kokoro Vietnamese.'
-  },
-  {
-    id: 'kokoro_hung_thinh',
-    name: 'Hưng Thịnh (Kokoro AI)',
+    id: 'vieneu_thien_minh',
+    name: 'Thiện Minh (VieNeu AI)',
     gender: 'male',
     locale: 'vi-VN',
-    description: 'Giọng nam trầm ấm, truyền cảm, hào hùng (Phù hợp truyện tiên hiệp & lịch sử)',
+    description: 'Giọng nam Bắc trầm ấm, hào hùng, phong cách kể chuyện cuốn hút',
     sampleText: 'Ba mươi năm Hà Đông, ba mươi năm Hà Tây, đừng khinh thiếu niên nghèo!'
+  },
+  {
+    id: 'vieneu_hai_dang',
+    name: 'Hải Đăng (VieNeu AI)',
+    gender: 'male',
+    locale: 'vi-VN',
+    description: 'Giọng nam Bắc thanh niên hiện đại, dõng dạc, tự nhiên',
+    sampleText: 'Chào bạn, chúc bạn có những phút giây nghe sách thật thư thái và hiệu quả.'
+  },
+  {
+    id: 'vieneu_mai_anh',
+    name: 'Mai Anh (VieNeu AI)',
+    gender: 'female',
+    locale: 'vi-VN',
+    description: 'Giọng nữ Bắc đĩnh đạc, phát âm chuẩn (Phù hợp sách kỹ năng & tin tức)',
+    sampleText: 'Chào bạn, hôm nay chúng ta cùng tìm hiểu những bài học quý giá từ cuốn sách này.'
+  },
+  {
+    id: 'vieneu_thuy_dung',
+    name: 'Thùy Dung (VieNeu AI)',
+    gender: 'female',
+    locale: 'vi-VN',
+    description: 'Giọng nữ Nam Bộ ngọt ngào, dịu dàng, êm tai khi nghe lâu',
+    sampleText: 'Chào bạn, chúc bạn một ngày thật bình an và nghe được nhiều điều bổ ích nghen.'
+  },
+  {
+    id: 'vieneu_thai_son',
+    name: 'Thái Sơn (VieNeu AI)',
+    gender: 'male',
+    locale: 'vi-VN',
+    description: 'Giọng nam Nam Bộ ấm áp, mộc mạc, đậm chất kể chuyện phương Nam',
+    sampleText: 'Gió chiều thổi mát rượi qua rặng dừa, con đường làng quanh co đưa ta về miền ký ức tuổi thơ.'
+  },
+  {
+    id: 'vieneu_ngoc_tran',
+    name: 'Ngọc Trân (VieNeu AI)',
+    gender: 'female',
+    locale: 'vi-VN',
+    description: 'Giọng nữ miền Trung đằm thắm, truyền cảm, sâu lắng',
+    sampleText: 'Dòng sông Hương lững lờ trôi dưới ánh trăng, mang theo bao nỗi niềm của người con xứ Huế.'
+  },
+  {
+    id: 'vieneu_quang_son',
+    name: 'Quang Sơn (VieNeu AI)',
+    gender: 'male',
+    locale: 'vi-VN',
+    description: 'Giọng nam miền Trung hào sảng, chân chất, phong cách tự nhiên',
+    sampleText: 'Nắng miền Trung chói chang trên những cồn cát trắng, nhưng lòng người vẫn mặn mòi tình quê.'
   },
   {
     id: 'vi-VN-HoaiMyNeural',
@@ -67,8 +107,12 @@ const getDetectedHostIp = (): string => {
     const scriptURL = (NativeModules.SourceCode as any)?.scriptURL;
     if (scriptURL) {
       const match = scriptURL.match(/^https?:\/\/([^:\/]+)/);
-      if (match && match[1] && match[1] !== 'localhost' && match[1] !== '127.0.0.1') {
-        return match[1];
+      if (match && match[1]) {
+        const host = match[1];
+        // Chỉ chấp nhận địa chỉ IP hợp lệ, bỏ qua domain tunnel (như exp.direct, ngrok)
+        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) && host !== '127.0.0.1') {
+          return host;
+        }
       }
     }
   } catch (e) {}
@@ -84,7 +128,7 @@ const estimateMs = (text: string, speed: number): number => {
 export const LOCAL_SERVER_IP = '192.168.110.172';
 export const LOCAL_SERVER_PORT = 3000;
 export const LOCAL_SERVER_URL = `http://${LOCAL_SERVER_IP}:${LOCAL_SERVER_PORT}`;
-export const MODAL_SERVER_URL = 'https://linhsamiu--audioverse-kokoro-api.modal.run';
+export const DEFAULT_TUNNEL_URL = 'https://nasty-wings-unite.loca.lt';
 
 class TTSService {
   private currentVoice: VoiceOption = VIETNAMESE_VOICES[0];
@@ -127,8 +171,12 @@ class TTSService {
     try {
       const savedType = await AsyncStorage.getItem('@audioverse/server_type');
       const savedUrl = await AsyncStorage.getItem('@audioverse/server_url');
+      // Tự động xóa cài đặt cloud cũ của Kokoro modal.run
       if (savedType === 'cloud' || (savedUrl && savedUrl.includes('modal.run'))) {
-        this.serverBaseUrl = MODAL_SERVER_URL;
+        await AsyncStorage.removeItem('@audioverse/server_type');
+        await AsyncStorage.removeItem('@audioverse/server_url');
+        this.serverIp = LOCAL_SERVER_IP;
+        this.serverBaseUrl = null;
       } else if (savedType === 'custom' && savedUrl) {
         this.serverBaseUrl = savedUrl;
       } else {
@@ -176,8 +224,7 @@ class TTSService {
     return this.serverIp;
   }
 
-  public getServerType(): 'local' | 'cloud' | 'custom' {
-    if (this.serverBaseUrl === MODAL_SERVER_URL) return 'cloud';
+  public getServerType(): 'local' | 'custom' {
     if (!this.serverBaseUrl) return 'local';
     return 'custom';
   }
@@ -189,35 +236,40 @@ class TTSService {
     AsyncStorage.removeItem('@audioverse/server_url').catch(() => {});
   }
 
+  public switchToTunnel() {
+    this.serverBaseUrl = DEFAULT_TUNNEL_URL;
+    AsyncStorage.setItem('@audioverse/server_type', 'tunnel').catch(() => {});
+    AsyncStorage.setItem('@audioverse/server_url', DEFAULT_TUNNEL_URL).catch(() => {});
+  }
+
   public switchToCloud() {
-    this.serverBaseUrl = MODAL_SERVER_URL;
-    AsyncStorage.setItem('@audioverse/server_type', 'cloud').catch(() => {});
-    AsyncStorage.setItem('@audioverse/server_url', MODAL_SERVER_URL).catch(() => {});
+    // Tương thích ngược: chuyển về tunnel
+    this.switchToTunnel();
   }
 
   public setServerIp(ip: string) {
     let clean = ip.trim();
     clean = clean.replace(/^https?:\/\//, '').replace(/:3000.*$/, '').replace(/\/.*$/, '');
-    this.serverIp = clean;
+    this.serverIp = clean || LOCAL_SERVER_IP;
     this.serverBaseUrl = null;
     AsyncStorage.setItem('@audioverse/server_type', 'local').catch(() => {});
     AsyncStorage.removeItem('@audioverse/server_url').catch(() => {});
   }
 
   /**
-   * Đặt URL tùy chỉnh (dự phòng)
+   * Đặt URL tùy chỉnh (dự phòng ngrok, tunnel hoặc server online)
    */
   public setServerUrl(url: string) {
     let clean = url.trim().replace(/\/+$/, '');
+    if (!clean) {
+      this.switchToLocal();
+      return;
+    }
     if (!/^https?:\/\//.test(clean)) {
-      clean = 'https://' + clean;
+      clean = 'http://' + clean;
     }
     this.serverBaseUrl = clean;
-    if (clean === MODAL_SERVER_URL) {
-      AsyncStorage.setItem('@audioverse/server_type', 'cloud').catch(() => {});
-    } else {
-      AsyncStorage.setItem('@audioverse/server_type', 'custom').catch(() => {});
-    }
+    AsyncStorage.setItem('@audioverse/server_type', 'custom').catch(() => {});
     AsyncStorage.setItem('@audioverse/server_url', clean).catch(() => {});
   }
 
@@ -230,26 +282,38 @@ class TTSService {
   }
 
   public async testServerConnection(): Promise<{ success: boolean; ip: string; message: string }> {
-    // Nếu đã đặt URL online (HF Spaces...), chỉ test đúng URL đó.
+    // 1. Nếu đã đặt URL tùy chỉnh thủ công:
     if (this.serverBaseUrl) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
         const res = await fetch(`${this.serverBaseUrl}/health`, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
           const data = await res.json();
-          return { success: true, ip: this.serverBaseUrl, message: `Kết nối thành công! (${data.engine || 'Kokoro'})` };
+          return {
+            success: true,
+            ip: this.serverBaseUrl,
+            message: `Kết nối thành công! (${data.engine || 'VieNeu-TTS'})`
+          };
         }
-      } catch (e: any) { /* fall through */ }
-      return { success: false, ip: this.serverBaseUrl, message: 'Không kết nối được tới server online' };
+      } catch (e: any) {}
     }
 
-    const candidateIps = Array.from(new Set([this.serverIp, '192.168.110.172', getDetectedHostIp()]));
+    // 2. Thử lần lượt: Local IP Wi-Fi -> Nếu không được, thử Tunnel online (dành cho 4G hoặc máy tính bật VPN)
+    const hostIp = getDetectedHostIp();
+    const candidateEndpoints = [
+      `http://${this.serverIp}:${this.serverPort}`,
+      `http://${LOCAL_SERVER_IP}:${this.serverPort}`,
+      `http://${hostIp}:${this.serverPort}`,
+      DEFAULT_TUNNEL_URL,
+    ];
 
-    for (const ip of candidateIps) {
+    const uniqueEndpoints = Array.from(new Set(candidateEndpoints)).filter(Boolean);
+
+    for (const endpoint of uniqueEndpoints) {
       try {
-        const url = `http://${ip}:${this.serverPort}/health`;
+        const url = `${endpoint}/health`;
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2500);
 
@@ -258,22 +322,26 @@ class TTSService {
 
         if (res.ok) {
           const data = await res.json();
-          this.serverIp = ip;
+          if (endpoint.startsWith('https://')) {
+            this.serverBaseUrl = endpoint;
+          } else {
+            const match = endpoint.match(/^http:\/\/([^:]+)/);
+            if (match && match[1]) this.serverIp = match[1];
+            this.serverBaseUrl = null;
+          }
           return {
             success: true,
-            ip: this.serverIp,
-            message: `Kết nối thành công! (${data.engine || 'Kokoro'})`
+            ip: endpoint,
+            message: `Kết nối thành công! (${data.engine || 'VieNeu-TTS'})`
           };
         }
-      } catch (e: any) {
-        // try next candidate
-      }
+      } catch (e: any) {}
     }
 
     return {
       success: false,
-      ip: this.serverIp,
-      message: 'Không tìm thấy server trên mạng Wi-Fi'
+      ip: this.getServerUrl(),
+      message: `Chưa kết nối được máy chủ AI (${this.getServerUrl()})`
     };
   }
 
@@ -360,10 +428,13 @@ class TTSService {
       return;
     }
 
-    // Thử câu đầu tiên qua server. Nếu server chết -> fallback giọng hệ thống.
+    // Thử câu đầu tiên qua server. Nếu server chết -> thông báo lỗi và fallback giọng hệ thống.
     const firstUri = await this.fetchChunk(startIdx, myId);
     if (myId !== this.playbackId) return;
     if (!firstUri) {
+      if (this.speakOnError) {
+        this.speakOnError(new Error(`Không thể kết nối máy chủ AI (${this.getServerUrl()}). Hãy kiểm tra điện thoại cùng Wi-Fi với PC!`));
+      }
       this.playViaDeviceSpeech(text, onFinish, onError);
       return;
     }
@@ -452,7 +523,7 @@ class TTSService {
   }
 
   private chunkUrl(index: number): string {
-    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_')) ? 'wav' : 'mp3';
     const text = this.sentences[index];
     const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
     return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
@@ -473,7 +544,7 @@ class TTSService {
    * Đổi giọng/tốc độ -> cache miss đúng, không phát nhầm file cũ.
    */
   private async cachePathFor(index: number): Promise<{ path: string; ext: string }> {
-    const ext = this.currentVoice.id.startsWith('kokoro_') ? 'wav' : 'mp3';
+    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_')) ? 'wav' : 'mp3';
     const key = `${this.sentences[index]}|${this.currentVoice.id}|${this.currentSpeed}`;
     const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
     return { path: `${this.audioCacheDir()}${hash}.${ext}`, ext };

@@ -2,9 +2,10 @@
 # Cài:  pip install -r requirements-server.txt
 # Chạy: python server.py  (mặc định cổng 3000)
 #
-# LƯU Ý lần chạy đầu: kokoro_vietnamese sẽ tự tải model
-# từ Hugging Face (~300MB, tải 1 lần duy nhất rồi dùng offline).
+# LƯU Ý lần chạy đầu: vieneu sẽ tự tải model
+# từ Hugging Face (~400MB, tải 1 lần duy nhất rồi dùng offline).
 soundfile
 edge_tts
-kokoro-vietnamese[onnx] @ git+https://github.com/iamdinhthuan/Kokoro-Vietnamese.git
+vieneu
+librosa
 beautifulsoup4

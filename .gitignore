@@ -46,3 +46,9 @@ audio_cache/
 # Python
 __pycache__/
 *.pyc
+*.py[cod]
+*$py.class
+
+# OAuth secrets & local credentials
+audioverse_batch/refresh_token.txt
+audioverse_batch/auth_url.txt
