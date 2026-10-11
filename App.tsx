@@ -15,14 +15,17 @@ import { Book, Chapter, VoiceOption } from './src/types';
 import { DRIVE_BOOKS } from './src/data/books';
 import { WEB_NOVELS } from './src/data/novels';
 import { ttsService, VIETNAMESE_VOICES } from './src/services/ttsService';
+import { batchService, BatchEngine } from './src/services/batchService';
 import { storageService, ReadingProgress } from './src/services/storageService';
 import { crawlerService } from './src/services/crawlerService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Components
 import { Header } from './src/components/Header';
 import { MiniPlayer } from './src/components/MiniPlayer';
 import { FullPlayerModal } from './src/components/FullPlayerModal';
 import { ChapterListModal } from './src/components/ChapterListModal';
+import { BatchQueueModal } from './src/components/BatchQueueModal';
 import { VoiceSelectorModal } from './src/components/VoiceSelectorModal';
 import { SleepTimerModal } from './src/components/SleepTimerModal';
 import { UrlImportModal } from './src/components/UrlImportModal';
@@ -61,12 +64,19 @@ export default function App() {
   // Modals
   const [isFullPlayerVisible, setIsFullPlayerVisible] = useState<boolean>(false);
   const [isChapterListVisible, setIsChapterListVisible] = useState<boolean>(false);
+  const [isBatchQueueVisible, setIsBatchQueueVisible] = useState<boolean>(false);
   const [isVoiceSelectorVisible, setIsVoiceSelectorVisible] = useState<boolean>(false);
   const [isSleepTimerVisible, setIsSleepTimerVisible] = useState<boolean>(false);
   const [isImportModalVisible, setIsImportModalVisible] = useState<boolean>(false);
 
   // Đọc tiếp (PLAN B2)
   const [lastProgress, setLastProgress] = useState<ReadingProgress | null>(null);
+
+  // Trạng thái audio từng chương trên batch server (đồng bộ hiển thị với server)
+  const [chapterAudioState, setChapterAudioState] = useState<{
+    ready: Set<string>;
+    pending: Set<string>;
+  }>({ ready: new Set<string>(), pending: new Set<string>() });
 
   // Nạp sách đã lưu + tiến độ nghe khi mở app
   useEffect(() => {
@@ -133,7 +143,187 @@ export default function App() {
     }
   };
 
+  /**
+   * Thử phát audio chương gen sẵn từ batch server (MP3 trên Drive đã tải về máy).
+   * Trả về true nếu phát được (chapter-audio mode), false để App dùng Kokoro realtime.
+   * sentenceIndex = -1 trong ReadingProgress đánh dấu chapter mode (tiếp tục từ positionMs).
+   */
+  const tryPlayChapterAudio = async (book: Book, chapter: Chapter, startMs: number = 0): Promise<boolean> => {
+    if (!batchService.isConfigured()) return false;
+    try {
+      const localUri = await batchService.getChapterAudioFile(book.id, chapter.id);
+      if (!localUri) return false;
+
+      setIsPlaying(true);
+      ttsService.setNowPlaying(book.title, chapter.title);
+      await ttsService.playChapterAudio(
+        localUri,
+        () => {
+          handleNextChapter();
+        },
+        (err) => {
+          console.log('[App] Chapter audio error:', err);
+          setIsPlaying(false);
+        },
+        (posMs) => {
+          // Lưu tiến độ theo mili-giây trong chương (throttle ~5s trong service gọi,
+          // ở đây lưu mỗi lần callback để đơn giản vì service đã throttle 2s).
+          const progress: ReadingProgress = {
+            bookId: book.id,
+            bookTitle: book.title,
+            chapterId: chapter.id,
+            chapterNumber: chapter.chapterNumber || 0,
+            chapterTitle: chapter.title,
+            sentenceIndex: -1,
+            positionMs: Math.floor(posMs),
+            totalSentences: 0,
+            lastListenedAt: Date.now(),
+          };
+          setLastProgress(progress);
+          storageService.saveProgress(progress).catch(() => {});
+        },
+        startMs
+      );
+      return true;
+    } catch (e) {
+      console.log('[App] tryPlayChapterAudio failed:', e);
+      return false;
+    }
+  };
+
+  /**
+   * Đẩy chương hiện tại + 2 chương tiếp theo vào hàng đợi batch (cuối hàng).
+   * Chỉ chạy khi bật "Tự động batch sách đang nghe". Server tự lấy nội dung
+   * (cào URL truyện / tra text sách trong Volume), TRUYỆN -> Gemini, SÁCH -> Kokoro.
+   */
+  const enqueueChapterForBatch = (book: Book, chapter: Chapter) => {
+    (async () => {
+      try {
+        if (!batchService.isConfigured()) return;
+        if (!(await batchService.getAutoBatch())) return;
+        const engine: BatchEngine =
+          book.type === 'web_novel' || book.type === 'custom_url' ? 'gemini' : 'kokoro';
+        const voice = engine === 'kokoro' ? await getKokoroVoiceForBook(book.id) : undefined;
+        const idx = book.chapters.findIndex((c) => c.id === chapter.id);
+        const items: {
+          book_id: string; chapter_id: string; title: string;
+          url?: string; engine: BatchEngine; voice?: string;
+        }[] = [];
+        for (let i = Math.max(0, idx); i < Math.min(idx + 3, book.chapters.length); i++) {
+          const ch = book.chapters[i];
+          items.push({
+            book_id: book.id,
+            chapter_id: ch.id,
+            title: ch.title,
+            url: ch.url || crawlerService.buildChapterUrl(book.sourceUrl, ch.chapterNumber || i + 1),
+            engine,
+            voice,
+          });
+        }
+        if (items.length > 0) {
+          const added = await batchService.enqueueChapters(items);
+          console.log(`[App] Đã đẩy ${added} chương vào hàng đợi batch (${engine}).`);
+        }
+      } catch (e) {
+        console.log('[App] enqueue batch error:', e);
+      }
+    })();
+  };
+
+  /** Giọng Kokoro khóa theo từng sách (1 sách 1 giọng, không pha trộn). */
+  const getKokoroVoiceForBook = async (bookId: string): Promise<string> => {
+    const DEFAULT = 'duc_an'; // Nguyễn chốt
+    try {
+      const v = await AsyncStorage.getItem(`@audioverse/book_voice_${bookId}`);
+      if (v) return v;
+      await AsyncStorage.setItem(`@audioverse/book_voice_${bookId}`, DEFAULT);
+    } catch {}
+    return DEFAULT;
+  };
+
+  /**
+   * User chọn batch 1 cuốn sách/truyện cụ thể: đẩy 10 chương tiếp theo
+   * (từ vị trí đang nghe, bỏ qua chương đã có audio / đang chờ) lên ĐẦU hàng đợi.
+   */
+  const handleBatchBook = async (book: Book) => {
+    try {
+      if (!batchService.isConfigured()) {
+        Alert.alert('Chưa có batch server', 'Hãy deploy batch server và dán URL vào BATCH_SERVER_URL trước.');
+        return;
+      }
+      const engine: BatchEngine =
+        book.type === 'web_novel' || book.type === 'custom_url' ? 'gemini' : 'kokoro';
+      const voice = engine === 'kokoro' ? await getKokoroVoiceForBook(book.id) : undefined;
+      const [index, pending, progress] = await Promise.all([
+        batchService.getChapterIndex(book.id),
+        batchService.getPendingChapters(book.id),
+        storageService.getProgress(book.id),
+      ]);
+      const ready = new Set(Object.keys(index));
+      let startIdx = 0;
+      if (progress) {
+        const pi = book.chapters.findIndex((c) => c.id === progress.chapterId);
+        if (pi >= 0) startIdx = pi;
+      }
+      const items: {
+        book_id: string; chapter_id: string; title: string;
+        url?: string; engine: BatchEngine; voice?: string;
+      }[] = [];
+      for (let i = startIdx; i < book.chapters.length && items.length < 10; i++) {
+        const ch = book.chapters[i];
+        if (ready.has(ch.id) || pending.has(ch.id)) continue;
+        items.push({
+          book_id: book.id,
+          chapter_id: ch.id,
+          title: ch.title,
+          url: ch.url || crawlerService.buildChapterUrl(book.sourceUrl, ch.chapterNumber || i + 1),
+          engine,
+          voice,
+        });
+      }
+      if (items.length === 0) {
+        Alert.alert('Không có gì để batch', 'Các chương tiếp theo đều đã có audio hoặc đang chờ gen.');
+        return;
+      }
+      const added = await batchService.enqueueChapters(items, 'front');
+      Alert.alert('Đã xếp hàng', `Đã đẩy ${added} chương của "${book.title}" lên đầu hàng đợi.`);
+    } catch (e) {
+      console.log('[App] handleBatchBook error:', e);
+      Alert.alert('Lỗi', 'Không đẩy được vào hàng đợi.');
+    }
+  };
+
   const startReading = async (text: string, book?: Book, chapter?: Chapter, startSentenceIndex: number = 0) => {
+    // Kiến trúc batch: app vào THẲNG Drive lấy MP3 chương, không qua Modal realtime.
+    if (book && chapter && batchService.isConfigured() && startSentenceIndex <= 0) {
+      const played = await tryPlayChapterAudio(book, chapter, 0);
+      if (played) return;
+      // Chưa có audio -> đẩy vào hàng đợi + báo rõ. KHÔNG đọc tạm từng câu.
+      enqueueChapterForBatch(book, chapter);
+      setIsPlaying(false);
+      Alert.alert(
+        'Chưa có audio',
+        `"${chapter.title}" chưa được gen. Đã xếp vào hàng đợi — server tự gen lúc 3h sáng.`,
+        [
+          { text: 'Để đêm tự gen', style: 'cancel' },
+          {
+            text: 'Gen ngay',
+            onPress: async () => {
+              const ok = await batchService.triggerNow(5);
+              Alert.alert(
+                ok ? 'Đã kích hoạt' : 'Lỗi',
+                ok
+                  ? 'Server đang gen, quay lại sau vài phút rồi mở lại chương này.'
+                  : 'Không gọi được server batch.'
+              );
+            },
+          },
+        ]
+      );
+      return;
+    }
+
+    // Batch chưa cấu hình: giữ luồng Kokoro realtime cũ (giai đoạn chuyển đổi).
     let readingText = text;
     if (book && chapter) {
       try {
@@ -198,13 +388,38 @@ export default function App() {
     setCurrentBook(book);
     setCurrentChapter(chapter);
     addToRecent(book);
-    await startReading(
-      chapter.content,
-      book,
-      chapter,
-      lastProgress.sentenceIndex
-    );
+    if (lastProgress.sentenceIndex === -1) {
+      // Chapter-audio mode: thử phát MP3 chương từ batch, tiếp tục từ positionMs.
+      // Không có audio sẵn -> rớt về Kokoro realtime từ đầu chương.
+      const played = await tryPlayChapterAudio(book, chapter, lastProgress.positionMs || 0);
+      if (!played) {
+        await startReading(chapter.content, book, chapter, 0);
+      }
+    } else {
+      await startReading(
+        chapter.content,
+        book,
+        chapter,
+        lastProgress.sentenceIndex
+      );
+    }
     setIsFullPlayerVisible(true);
+  };
+
+  /** Mở danh sách chương + tải trạng thái audio từ batch server (đồng bộ). */
+  const openChapterList = async () => {
+    setIsChapterListVisible(true);
+    if (currentBook && batchService.isConfigured()) {
+      try {
+        const [index, pending] = await Promise.all([
+          batchService.getChapterIndex(currentBook.id),
+          batchService.getPendingChapters(currentBook.id),
+        ]);
+        setChapterAudioState({ ready: new Set(Object.keys(index)), pending });
+      } catch {}
+    } else {
+      setChapterAudioState({ ready: new Set<string>(), pending: new Set<string>() });
+    }
   };
 
   /** Xóa sách khỏi tủ (kèm xác nhận, PLAN B2). */
@@ -219,6 +434,8 @@ export default function App() {
           style: 'destructive',
           onPress: async () => {
             await storageService.deleteBook(book.id);
+            // Đồng bộ: xóa luôn hàng đợi + audio trên batch server / Drive
+            batchService.removeBook(book.id).catch(() => {});
             setBooks(prev => prev.filter(b => b.id !== book.id));
             setNovels(prev => prev.filter(b => b.id !== book.id));
             setSavedBooks(prev => prev.filter(b => b.id !== book.id));
@@ -501,8 +718,17 @@ export default function App() {
         onSeek={handleSeek}
         onChangeSpeed={handleChangeSpeed}
         onOpenVoiceSelector={() => setIsVoiceSelectorVisible(true)}
-        onOpenChapterList={() => setIsChapterListVisible(true)}
+        onOpenChapterList={openChapterList}
         onOpenSleepTimer={() => setIsSleepTimerVisible(true)}
+        onOpenBatchQueue={() => setIsBatchQueueVisible(true)}
+      />
+
+      {/* Batch Queue Modal */}
+      <BatchQueueModal
+        visible={isBatchQueueVisible}
+        books={books}
+        onClose={() => setIsBatchQueueVisible(false)}
+        onBatchBook={handleBatchBook}
       />
 
       {/* Chapter List Modal */}
@@ -510,6 +736,8 @@ export default function App() {
         visible={isChapterListVisible}
         book={currentBook}
         currentChapter={currentChapter}
+        readyChapterIds={chapterAudioState.ready}
+        pendingChapterIds={chapterAudioState.pending}
         onClose={() => setIsChapterListVisible(false)}
         onSelectChapter={handleSelectChapter}
       />

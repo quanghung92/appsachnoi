@@ -42,3 +42,7 @@ yarn-error.*
 
 # Edge-TTS server cache (local only)
 audio_cache/
+
+# Python
+__pycache__/
+*.pyc

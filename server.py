@@ -380,10 +380,18 @@ class TTSHandler(BaseHTTPRequestHandler):
 def run():
     server_address = ("0.0.0.0", PORT)
     httpd = HTTPServer(server_address, TTSHandler)
+    try:
+        import socket
+        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _s.connect(("8.8.8.8", 80))
+        lan_ip = _s.getsockname()[0]
+        _s.close()
+    except Exception:
+        lan_ip = "?"
     print("======================================================")
     print(f"🎧 AudioVerse Dual TTS Server (Kokoro + Edge-TTS)")
     print(f"👉 Local Endpoint: http://localhost:{PORT}/tts")
-    print(f"👉 Wi-Fi Endpoint: http://192.168.110.172:{PORT}/tts")
+    print(f"👉 Wi-Fi Endpoint: http://{lan_ip}:{PORT}/tts")
     print("======================================================")
     httpd.serve_forever()
 
