@@ -41,6 +41,11 @@
       ],
       "expo-font",
       "expo-asset"
-    ]
+    ],
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    }
   }
 }
