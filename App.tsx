@@ -193,8 +193,9 @@ export default function App() {
 
   /**
    * Đẩy chương hiện tại + 2 chương tiếp theo vào hàng đợi batch (cuối hàng).
-   * Chỉ chạy khi bật "Tự động batch sách đang nghe". Server tự lấy nội dung
-   * (cào URL truyện / tra text sách trong Volume), TRUYỆN -> Gemini, SÁCH -> Kokoro.
+   * Chỉ chạy khi bật "Tự động batch sách đang nghe". Bỏ qua chương đã có audio
+   * hoặc đang chờ gen để tránh trùng. Server/worker tự lấy nội dung
+   * (cào URL truyện / tra text sách trong Volume), tất cả dùng Kokoro (duc_an).
    */
   const enqueueChapterForBatch = (book: Book, chapter: Chapter) => {
     (async () => {
@@ -204,6 +205,11 @@ export default function App() {
         // Server batch chỉ chạy Kokoro (Gemini đã tắt từ đêm 11/10) — mọi loại nội dung đều dùng Kokoro.
         const engine: BatchEngine = 'kokoro';
         const voice = await getKokoroVoiceForBook(book.id);
+        const [index, pending] = await Promise.all([
+          batchService.getChapterIndex(book.id),
+          batchService.getPendingChapters(book.id),
+        ]);
+        const ready = new Set(Object.keys(index));
         const idx = book.chapters.findIndex((c) => c.id === chapter.id);
         const items: {
           book_id: string; chapter_id: string; title: string;
@@ -211,6 +217,7 @@ export default function App() {
         }[] = [];
         for (let i = Math.max(0, idx); i < Math.min(idx + 3, book.chapters.length); i++) {
           const ch = book.chapters[i];
+          if (ready.has(ch.id) || pending.has(ch.id)) continue;
           items.push({
             book_id: book.id,
             chapter_id: ch.id,
@@ -303,13 +310,14 @@ export default function App() {
       setIsPlaying(false);
       Alert.alert(
         'Chưa có audio',
-        `"${chapter.title}" chưa được gen. Đã xếp vào hàng đợi — server tự gen lúc 3h sáng.`,
+        `"${chapter.title}" chưa được gen. Đã xếp vào hàng đợi — worker tự gen trong vòng 1 giờ.`,
         [
-          { text: 'Để đêm tự gen', style: 'cancel' },
+          { text: 'Để worker tự gen', style: 'cancel' },
           {
             text: 'Gen ngay',
             onPress: async () => {
               const ok = await batchService.triggerNow(5);
+              if (ok) batchService.invalidateIndexCache();
               Alert.alert(
                 ok ? 'Đã kích hoạt' : 'Lỗi',
                 ok

@@ -93,6 +93,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
     setTriggering(true);
     const ok = await batchService.triggerNow(10);
     setTriggering(false);
+    if (ok) batchService.invalidateIndexCache();
     Alert.alert(
       ok ? 'Đã kích hoạt' : 'Lỗi',
       ok ? 'Server đang gen theo thứ tự hàng đợi.' : 'Không gọi được server batch.'
@@ -152,7 +153,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Hàng đợi Batch</Text>
-              <Text style={styles.subtitle}>Server gen lúc 3h sáng · thứ tự = độ ưu tiên</Text>
+              <Text style={styles.subtitle}>Worker gen mỗi giờ · thứ tự = độ ưu tiên</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Ionicons name="close" size={24} color={Colors.textPrimary} />
@@ -192,7 +193,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
             <ScrollView contentContainerStyle={styles.list}>
               <Text style={styles.sectionTitle}>Đang chờ ({queue.length})</Text>
               {queue.length === 0 ? (
-                <Text style={styles.emptyText}>Hàng đợi trống — đêm nay server nghỉ.</Text>
+                <Text style={styles.emptyText}>Hàng đợi trống.</Text>
               ) : (
                 queue.map((item, index) => (
                   <View key={`${item.book_id}/${item.chapter_id}`}>
