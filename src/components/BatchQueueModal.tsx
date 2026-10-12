@@ -105,7 +105,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
       <View style={styles.queueMeta}>
         <Text style={styles.queueTitle} numberOfLines={1}>{item.title || item.chapter_id}</Text>
         <Text style={styles.queueSub} numberOfLines={1}>
-          {bookTitleOf(item.book_id)} · {item.engine === 'kokoro' ? 'Kokoro' : 'Gemini'}
+          {bookTitleOf(item.book_id)} · {item.engine === 'kokoro' ? 'Kokoro' : item.engine}
         </Text>
       </View>
       <View style={styles.queueActions}>
@@ -135,7 +135,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
       <View style={styles.bookMeta}>
         <Text style={styles.bookTitle} numberOfLines={1}>{item.title}</Text>
         <Text style={styles.bookSub} numberOfLines={1}>
-          {item.chapters.length} chương · {item.type === 'web_novel' || item.type === 'custom_url' ? 'Gemini' : 'Kokoro'}
+          {item.chapters.length} chương · Kokoro
         </Text>
       </View>
       <TouchableOpacity style={styles.batchBtn} onPress={() => onBatchBook(item)}>
