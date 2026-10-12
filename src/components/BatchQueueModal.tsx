@@ -9,6 +9,7 @@ import {
   Switch,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
@@ -33,6 +34,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
   const [autoBatch, setAutoBatch] = useState(true);
   const [loading, setLoading] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [linkingBook, setLinkingBook] = useState<Book | null>(null);
+  const [serverIdInput, setServerIdInput] = useState('');
+  const [serverIds, setServerIds] = useState<Record<string, string>>({});
 
   const bookTitleOf = (bookId: string) =>
     books.find((b) => b.id === bookId)?.title || bookId;
@@ -50,9 +54,16 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
       ]);
       setQueue(q);
       setAutoBatch(ab);
+      // Load server book ID links
+      const ids: Record<string, string> = {};
+      for (const b of books) {
+        const sid = await batchService.getServerBookId(b.id);
+        if (sid) ids[b.id] = sid;
+      }
+      setServerIds(ids);
     } catch {}
     setLoading(false);
-  }, []);
+  }, [books]);
 
   useEffect(() => {
     if (visible) {
@@ -139,20 +150,52 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
     ]);
   };
 
-  const renderBookItem = ({ item }: { item: Book }) => (
-    <View style={styles.bookItem}>
-      <View style={styles.bookMeta}>
-        <Text style={styles.bookTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.bookSub} numberOfLines={1}>
-          {item.chapters.length} chương · Kokoro
-        </Text>
+  const openLinkDialog = async (book: Book) => {
+    const current = await batchService.getServerBookId(book.id);
+    setServerIdInput(current || '');
+    setLinkingBook(book);
+  };
+
+  const saveLink = async () => {
+    if (!linkingBook) return;
+    const sid = serverIdInput.trim();
+    if (sid) {
+      await batchService.setServerBookId(linkingBook.id, sid);
+      setServerIds((prev) => ({ ...prev, [linkingBook.id]: sid }));
+      Alert.alert('Đã liên kết', `"${linkingBook.title}" → server book ${sid}`);
+    } else {
+      // Xóa liên kết: set rỗng
+      await batchService.setServerBookId(linkingBook.id, '');
+      setServerIds((prev) => {
+        const next = { ...prev };
+        delete next[linkingBook.id];
+        return next;
+      });
+    }
+    setLinkingBook(null);
+    setServerIdInput('');
+  };
+
+  const renderBookItem = ({ item }: { item: Book }) => {
+    const linked = serverIds[item.id];
+    return (
+      <View style={styles.bookItem}>
+        <View style={styles.bookMeta}>
+          <Text style={styles.bookTitle} numberOfLines={1}>{item.title}</Text>
+          <Text style={styles.bookSub} numberOfLines={1}>
+            {item.chapters.length} chương · Kokoro{linked ? ` · 🔗 ${linked}` : ' · chưa liên kết server'}
+          </Text>
+        </View>
+        <TouchableOpacity style={styles.linkBtn} onPress={() => openLinkDialog(item)}>
+          <Ionicons name="link-outline" size={15} color={linked ? Colors.primary : Colors.textMuted} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.batchBtn} onPress={() => handleBatchPress(item)}>
+          <Ionicons name="cloud-upload-outline" size={15} color={Colors.background} />
+          <Text style={styles.batchBtnText}>Batch</Text>
+        </TouchableOpacity>
       </View>
-      <TouchableOpacity style={styles.batchBtn} onPress={() => handleBatchPress(item)}>
-        <Ionicons name="cloud-upload-outline" size={15} color={Colors.background} />
-        <Text style={styles.batchBtnText}>Batch</Text>
-      </TouchableOpacity>
-    </View>
-  );
+    );
+  };
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
@@ -220,6 +263,41 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
           )}
         </View>
       </View>
+
+      {/* Dialog liên kết book với server book_id */}
+      <Modal visible={!!linkingBook} animationType="fade" transparent>
+        <View style={styles.overlay}>
+          <View style={styles.linkCard}>
+            <Text style={styles.linkTitle}>Liên kết server</Text>
+            <Text style={styles.linkSub} numberOfLines={2}>
+              "{linkingBook?.title}" → nhập book_id trên server (vd: n224d74b8a6). Để trống để hủy liên kết.
+            </Text>
+            <TextInput
+              style={styles.linkInput}
+              value={serverIdInput}
+              onChangeText={setServerIdInput}
+              placeholder="server book_id"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.linkActions}>
+              <TouchableOpacity
+                style={[styles.linkActionBtn, styles.linkCancel]}
+                onPress={() => { setLinkingBook(null); setServerIdInput(''); }}
+              >
+                <Text style={styles.linkCancelText}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.linkActionBtn, styles.linkSave]}
+                onPress={saveLink}
+              >
+                <Text style={styles.linkSaveText}>Lưu</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Modal>
   );
 };
@@ -393,6 +471,64 @@ const styles = StyleSheet.create({
   batchBtnText: {
     color: Colors.background,
     fontSize: 12,
+    fontWeight: '700',
+  },
+  linkBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  linkCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 20,
+    marginHorizontal: 32,
+    alignSelf: 'center',
+    width: '80%',
+  },
+  linkTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  linkSub: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginBottom: 12,
+  },
+  linkInput: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Colors.textPrimary,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+  },
+  linkActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  linkActionBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  linkCancel: {
+    backgroundColor: Colors.surfaceElevated,
+  },
+  linkCancelText: {
+    color: Colors.textPrimary,
+    fontWeight: '600',
+  },
+  linkSave: {
+    backgroundColor: Colors.primary,
+  },
+  linkSaveText: {
+    color: Colors.background,
     fontWeight: '700',
   },
 });

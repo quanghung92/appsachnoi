@@ -45,6 +45,7 @@ export interface BatchQueueItem {
 export type QueuePosition = 'front' | 'back';
 
 const AUTO_BATCH_KEY = '@audioverse/auto_batch_current_book';
+const SERVER_BOOK_ID_PREFIX = '@audioverse/server_book_id_';
 
 /**
  * Worker lưu index với chapter_id dạng rút gọn (c1, c2...), còn app dùng id có
@@ -232,10 +233,11 @@ class BatchService {
   /** Lấy index chương đã có audio của 1 sách (có cache RAM 5 phút). */
   public async getChapterIndex(bookId: string): Promise<Record<string, BatchChapterAudio>> {
     if (!this.isConfigured()) return {};
+    const resolvedId = await this.resolveBookId(bookId);
     const now = Date.now();
     if (
       indexCacheState &&
-      indexCacheState.bookId === bookId &&
+      indexCacheState.bookId === resolvedId &&
       now - indexCacheState.at < INDEX_TTL_MS
     ) {
       return indexCacheState.chapters;
@@ -244,14 +246,14 @@ class BatchService {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
       const res = await fetch(
-        `${this.getServerUrl()}/index?book_id=${encodeURIComponent(bookId)}`,
+        `${this.getServerUrl()}/index?book_id=${encodeURIComponent(resolvedId)}`,
         { signal: controller.signal }
       );
       clearTimeout(timeoutId);
       if (!res.ok) return indexCacheState?.chapters || {};
       const data = await res.json();
       const chapters = (data.chapters || {}) as Record<string, BatchChapterAudio>;
-      indexCacheState = { bookId, at: now, chapters };
+      indexCacheState = { bookId: resolvedId, at: now, chapters };
       return chapters;
     } catch (e) {
       console.log('[Batch] index error:', e);
@@ -262,6 +264,31 @@ class BatchService {
   /** Xóa cache index trong RAM (gọi sau khi biết có chương mới được gen xong). */
   public invalidateIndexCache() {
     indexCacheState = null;
+  }
+
+  /**
+   * Liên kết book trong app với book_id trên server (khi 2 bên lệch ID).
+   * Ví dụ: app dùng id local `crawled_xxx` nhưng server lưu audio dưới `n224d74b8a6`.
+   */
+  public async setServerBookId(localBookId: string, serverBookId: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(SERVER_BOOK_ID_PREFIX + localBookId, serverBookId);
+      this.invalidateIndexCache();
+    } catch {}
+  }
+
+  public async getServerBookId(localBookId: string): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(SERVER_BOOK_ID_PREFIX + localBookId);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Book ID thực dùng để tra index (ưu tiên ID server nếu đã liên kết). */
+  public async resolveBookId(localBookId: string): Promise<string> {
+    const serverId = await this.getServerBookId(localBookId);
+    return serverId || localBookId;
   }
 
   /**
