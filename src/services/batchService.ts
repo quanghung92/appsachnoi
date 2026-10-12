@@ -18,7 +18,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  */
 
 // URL của audioverse-batch sau khi `modal deploy modal_batch.py`
-export const BATCH_SERVER_URL = 'https://linhsamiu--audioverse-batch-api.modal.run';
+const BATCH_SERVER_URL_PROD = 'https://linhsamiu--audioverse-batch-api.modal.run';
+
+/**
+ * Khi chạy web dev (npx expo start --web), trình duyệt chặn gọi trực tiếp
+ * Modal API (CORS). Dùng cors-proxy.js local: app gọi http://<host>:3001/modal/...
+ * Trên native (iOS) vẫn gọi trực tiếp như cũ.
+ */
+function resolveBatchServerUrl(): string {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.location !== 'undefined' &&
+    typeof window.location.hostname === 'string' &&
+    window.location.hostname.length > 0 &&
+    __DEV__
+  ) {
+    return `http://${window.location.hostname}:3001/modal`;
+  }
+  return BATCH_SERVER_URL_PROD;
+}
+
+export const BATCH_SERVER_URL = resolveBatchServerUrl();
 
 const INDEX_TTL_MS = 5 * 60 * 1000; // cache index trong RAM 5 phút
 const SAVE_TO_DEVICE_KEY = '@audioverse/save_audio_to_device';
