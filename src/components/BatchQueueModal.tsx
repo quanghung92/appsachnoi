@@ -20,7 +20,7 @@ interface BatchQueueModalProps {
   books: Book[];
   onClose: () => void;
   /** User chọn batch 1 cuốn sách/truyện cụ thể (đẩy lên đầu hàng đợi). */
-  onBatchBook: (book: Book) => void;
+  onBatchBook: (book: Book, all?: boolean) => void;
 }
 
 export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
@@ -131,6 +131,14 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
     </View>
   );
 
+  const handleBatchPress = (book: Book) => {
+    Alert.alert(`Batch "${book.title}"`, 'Đẩy lên đầu hàng đợi:', [
+      { text: 'Hủy', style: 'cancel' },
+      { text: '10 chương tiếp theo', onPress: () => onBatchBook(book, false) },
+      { text: 'Toàn bộ sách', onPress: () => onBatchBook(book, true) },
+    ]);
+  };
+
   const renderBookItem = ({ item }: { item: Book }) => (
     <View style={styles.bookItem}>
       <View style={styles.bookMeta}>
@@ -139,7 +147,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
           {item.chapters.length} chương · Kokoro
         </Text>
       </View>
-      <TouchableOpacity style={styles.batchBtn} onPress={() => onBatchBook(item)}>
+      <TouchableOpacity style={styles.batchBtn} onPress={() => handleBatchPress(item)}>
         <Ionicons name="cloud-upload-outline" size={15} color={Colors.background} />
         <Text style={styles.batchBtnText}>Batch</Text>
       </TouchableOpacity>
@@ -203,7 +211,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
               )}
               <Text style={styles.sectionTitle}>Chọn sách để batch</Text>
               <Text style={styles.sectionHint}>
-                Đẩy 10 chương tiếp theo (từ vị trí đang nghe) lên đầu hàng đợi.
+                Đẩy các chương (từ vị trí đang nghe) lên đầu hàng đợi — gen trước các mục khác, tự crawl xếp sau cùng.
               </Text>
               {books.map((b) => (
                 <View key={b.id}>{renderBookItem({ item: b })}</View>

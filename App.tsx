@@ -249,10 +249,11 @@ export default function App() {
   };
 
   /**
-   * User chọn batch 1 cuốn sách/truyện cụ thể: đẩy 10 chương tiếp theo
+   * User chọn batch 1 cuốn sách/truyện cụ thể: đẩy các chương tiếp theo
    * (từ vị trí đang nghe, bỏ qua chương đã có audio / đang chờ) lên ĐẦU hàng đợi.
+   * all=true: toàn bộ các chương còn lại; all=false: chỉ 10 chương tiếp theo.
    */
-  const handleBatchBook = async (book: Book) => {
+  const handleBatchBook = async (book: Book, all: boolean = false) => {
     try {
       if (!batchService.isConfigured()) {
         Alert.alert('Chưa có batch server', 'Hãy deploy batch server và dán URL vào BATCH_SERVER_URL trước.');
@@ -272,11 +273,12 @@ export default function App() {
         const pi = book.chapters.findIndex((c) => c.id === progress.chapterId);
         if (pi >= 0) startIdx = pi;
       }
+      const maxItems = all ? book.chapters.length : 10;
       const items: {
         book_id: string; chapter_id: string; title: string;
         url?: string; engine: BatchEngine; voice?: string;
       }[] = [];
-      for (let i = startIdx; i < book.chapters.length && items.length < 10; i++) {
+      for (let i = startIdx; i < book.chapters.length && items.length < maxItems; i++) {
         const ch = book.chapters[i];
         if (ready.has(ch.id) || pending.has(ch.id)) continue;
         items.push({
