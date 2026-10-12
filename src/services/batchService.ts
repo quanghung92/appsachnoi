@@ -46,6 +46,15 @@ export type QueuePosition = 'front' | 'back';
 
 const AUTO_BATCH_KEY = '@audioverse/auto_batch_current_book';
 
+/**
+ * Worker lưu index với chapter_id dạng rút gọn (c1, c2...), còn app dùng id có
+ * prefix theo nguồn (web_c1, custom_c1...). Chuẩn hóa để tra index khớp.
+ */
+export function toIndexChapterId(chapterId: string): string {
+  const m = chapterId.match(/(c\d+)$/);
+  return m ? m[1] : chapterId;
+}
+
 export interface ImportedChapter {
   id: string;
   title: string;
@@ -352,7 +361,7 @@ class BatchService {
     if (!this.isConfigured()) return null;
     try {
       const index = await this.getChapterIndex(bookId);
-      const entry = index[chapterId];
+      const entry = index[chapterId] || index[toIndexChapterId(chapterId)];
       if (!entry || !entry.download_url) return null;
 
       const saveToDevice = await this.getSaveToDevice();

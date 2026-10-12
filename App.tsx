@@ -15,7 +15,7 @@ import { Book, Chapter, VoiceOption } from './src/types';
 import { DRIVE_BOOKS } from './src/data/books';
 import { WEB_NOVELS } from './src/data/novels';
 import { ttsService, VIETNAMESE_VOICES } from './src/services/ttsService';
-import { batchService, BatchEngine } from './src/services/batchService';
+import { batchService, BatchEngine, toIndexChapterId } from './src/services/batchService';
 import { storageService, ReadingProgress } from './src/services/storageService';
 import { crawlerService } from './src/services/crawlerService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -217,7 +217,7 @@ export default function App() {
         }[] = [];
         for (let i = Math.max(0, idx); i < Math.min(idx + 3, book.chapters.length); i++) {
           const ch = book.chapters[i];
-          if (ready.has(ch.id) || pending.has(ch.id)) continue;
+          if (ready.has(ch.id) || ready.has(toIndexChapterId(ch.id)) || pending.has(ch.id)) continue;
           items.push({
             book_id: book.id,
             chapter_id: ch.id,
@@ -280,7 +280,7 @@ export default function App() {
       }[] = [];
       for (let i = startIdx; i < book.chapters.length && items.length < maxItems; i++) {
         const ch = book.chapters[i];
-        if (ready.has(ch.id) || pending.has(ch.id)) continue;
+        if (ready.has(ch.id) || ready.has(toIndexChapterId(ch.id)) || pending.has(ch.id)) continue;
         items.push({
           book_id: book.id,
           chapter_id: ch.id,
