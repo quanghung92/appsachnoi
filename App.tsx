@@ -201,9 +201,9 @@ export default function App() {
       try {
         if (!batchService.isConfigured()) return;
         if (!(await batchService.getAutoBatch())) return;
-        const engine: BatchEngine =
-          book.type === 'web_novel' || book.type === 'custom_url' ? 'gemini' : 'kokoro';
-        const voice = engine === 'kokoro' ? await getKokoroVoiceForBook(book.id) : undefined;
+        // Server batch chỉ chạy Kokoro (Gemini đã tắt từ đêm 11/10) — mọi loại nội dung đều dùng Kokoro.
+        const engine: BatchEngine = 'kokoro';
+        const voice = await getKokoroVoiceForBook(book.id);
         const idx = book.chapters.findIndex((c) => c.id === chapter.id);
         const items: {
           book_id: string; chapter_id: string; title: string;
@@ -251,9 +251,9 @@ export default function App() {
         Alert.alert('Chưa có batch server', 'Hãy deploy batch server và dán URL vào BATCH_SERVER_URL trước.');
         return;
       }
-      const engine: BatchEngine =
-        book.type === 'web_novel' || book.type === 'custom_url' ? 'gemini' : 'kokoro';
-      const voice = engine === 'kokoro' ? await getKokoroVoiceForBook(book.id) : undefined;
+      // Server batch chỉ chạy Kokoro (Gemini đã tắt từ đêm 11/10) — mọi loại nội dung đều dùng Kokoro.
+      const engine: BatchEngine = 'kokoro';
+      const voice = await getKokoroVoiceForBook(book.id);
       const [index, pending, progress] = await Promise.all([
         batchService.getChapterIndex(book.id),
         batchService.getPendingChapters(book.id),
