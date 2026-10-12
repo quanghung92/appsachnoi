@@ -8,7 +8,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  *  1. App import sách/truyện: POST /import_book (PDF Drive) hoặc /import_novel (URL).
  *     Server tự tải PDF / cào truyện, tách chương, lưu text vào Volume.
  *  2. App đẩy chương cần gen: POST /enqueue {book_id, chapter_id, url?, engine, voice?}.
- *     TRUYỆN -> Gemini (Zubenelgenubi), SÁCH -> Kokoro (duc_an).
+ *     TRUYỆN -> Kokoro (duc_an), SÁCH -> Kokoro (duc_an). Server chỉ chạy Kokoro từ đêm 11/10
+ *     (Gemini đã tắt) — app không bao giờ gửi engine 'gemini' nữa.
  *  3. Mỗi đêm 3h (hoặc bấm "Gen ngay" -> POST /trigger), server gen MP3 -> Drive.
  *  4. App vào THẲNG Drive lấy MP3 (stream hoặc tải về máy tùy cấu hình).
  *
@@ -22,7 +23,7 @@ export const BATCH_SERVER_URL = 'https://linhsamiu--audioverse-batch-api.modal.r
 const INDEX_TTL_MS = 5 * 60 * 1000; // cache index trong RAM 5 phút
 const SAVE_TO_DEVICE_KEY = '@audioverse/save_audio_to_device';
 
-export type BatchEngine = 'gemini' | 'kokoro';
+export type BatchEngine = 'kokoro';
 
 export interface BatchChapterItem {
   book_id: string;
