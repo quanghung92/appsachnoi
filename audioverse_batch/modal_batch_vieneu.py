@@ -755,6 +755,8 @@ def _run_batch(max_items: int = MAX_VIENEU_PER_RUN):
             break
         if done >= max_items:
             break
+        if done >= max_items:
+            break
         key = f"{item['book_id']}/{item['chapter_id']}"
         btype = _book_type(item["book_id"])
         _OLD_VOICES = {"duc_an", "diem_trinh", "zubenelgenubi"}
