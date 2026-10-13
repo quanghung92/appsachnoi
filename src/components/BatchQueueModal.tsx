@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
@@ -30,6 +31,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
   onClose,
   onBatchBook,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+
   const [queue, setQueue] = useState<BatchQueueItem[]>([]);
   const [autoBatch, setAutoBatch] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -198,9 +202,9 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
-        <View style={styles.sheet}>
+    <Modal visible={visible} animationType={isWide ? 'fade' : 'slide'} transparent>
+      <View style={[styles.overlay, isWide && styles.overlayWide]}>
+        <View style={[styles.sheet, isWide && styles.sheetWide]}>
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Hàng đợi Batch</Text>
@@ -270,7 +274,7 @@ export const BatchQueueModal: React.FC<BatchQueueModalProps> = ({
           <View style={styles.linkCard}>
             <Text style={styles.linkTitle}>Liên kết server</Text>
             <Text style={styles.linkSub} numberOfLines={2}>
-              "{linkingBook?.title}" → nhập book_id trên server (vd: n224d74b8a6). Để trống để hủy liên kết.
+              &quot;{linkingBook?.title}&quot; → nhập book_id trên server (vd: n224d74b8a6). Để trống để hủy liên kết.
             </Text>
             <TextInput
               style={styles.linkInput}
@@ -308,12 +312,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
+  overlayWide: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
   sheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '85%',
     paddingBottom: 24,
+  },
+  sheetWide: {
+    maxWidth: 620,
+    width: '100%',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    maxHeight: '85%',
+    overflow: 'hidden',
   },
   header: {
     flexDirection: 'row',

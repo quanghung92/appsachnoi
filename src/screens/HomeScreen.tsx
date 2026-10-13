@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
@@ -20,6 +21,7 @@ interface HomeScreenProps {
   novels: Book[];
   currentBook: Book | null;
   isPlaying: boolean;
+  loadingBookId?: string | null;
   selectedCategory: string;
   lastProgress: ReadingProgress | null;
   onSelectCategory: (category: string) => void;
@@ -46,6 +48,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   novels,
   currentBook,
   isPlaying,
+  loadingBookId = null,
   selectedCategory,
   lastProgress,
   onSelectCategory,
@@ -54,6 +57,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenImportModal,
   onResume,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+  const isLargeScreen = width >= 1200;
+
   const featuredBook = books[0] || novels[0];
 
   const filteredBooks = books.filter((b) =>
@@ -63,6 +70,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const filteredNovels = novels.filter((n) =>
     selectedCategory === 'Tất Cả' ? true : n.category.includes(selectedCategory)
   );
+
+  const formatResumeTime = (ms?: number) => {
+    if (!ms || ms <= 0) return '00:00';
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    return `${m}:${(s % 60).toString().padStart(2, '0')}`;
+  };
 
   const resumePercent =
     lastProgress && lastProgress.totalSentences > 0
@@ -87,10 +101,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               {lastProgress.bookTitle}
             </Text>
             <Text style={styles.resumeChapter} numberOfLines={1}>
-              {lastProgress.chapterTitle} • {resumePercent}%{lastProgress.totalSentences > 0 ? ` (câu ${lastProgress.sentenceIndex + 1}/${lastProgress.totalSentences})` : ''}
+              {lastProgress.chapterTitle} •{' '}
+              {lastProgress.sentenceIndex === -1
+                ? `Đã nghe đến ${formatResumeTime(lastProgress.positionMs)}`
+                : `${resumePercent}% (câu ${lastProgress.sentenceIndex + 1}/${lastProgress.totalSentences})`}
             </Text>
             <View style={styles.resumeBarBg}>
-              <View style={[styles.resumeBarFill, { width: `${resumePercent}%` }]} />
+              <View
+                style={[
+                  styles.resumeBarFill,
+                  { width: lastProgress.sentenceIndex === -1 ? '45%' : `${resumePercent}%` },
+                ]}
+              />
             </View>
           </View>
           <Ionicons name="chevron-forward" size={22} color={Colors.textMuted} />
@@ -100,7 +122,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {featuredBook && (
         <View style={styles.heroWrapper}>
           <TouchableOpacity
-            style={styles.heroCard}
+            style={[styles.heroCard, isWide && styles.heroCardWide]}
             onPress={() => onSelectBook(featuredBook)}
             activeOpacity={0.9}
           >
@@ -109,27 +131,31 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               style={styles.heroImage}
               resizeMode="cover"
             />
-            <View style={styles.heroOverlay}>
+            <View style={[styles.heroOverlay, isWide && styles.heroOverlayWide]}>
               <View style={styles.heroTag}>
                 <Ionicons name="sparkles" size={12} color={Colors.primary} />
                 <Text style={styles.heroTagText}>SÁCH NÓI ĐƯỢC NGHE NHIỀU NHẤT</Text>
               </View>
 
-              <Text style={styles.heroTitle} numberOfLines={2}>
+              <Text style={[styles.heroTitle, isWide && styles.heroTitleWide]} numberOfLines={2}>
                 {featuredBook.title}
               </Text>
               <Text style={styles.heroAuthor}>{featuredBook.author}</Text>
-              <Text style={styles.heroDesc} numberOfLines={2}>
+              <Text style={[styles.heroDesc, isWide && styles.heroDescWide]} numberOfLines={2}>
                 {featuredBook.description}
               </Text>
 
               <View style={styles.heroActions}>
                 <TouchableOpacity
-                  style={styles.heroPlayBtn}
+                  style={[
+                    styles.heroPlayBtn,
+                    loadingBookId === featuredBook.id && { opacity: 0.85 },
+                  ]}
                   onPress={(e) => {
                     e.stopPropagation();
                     onTogglePlay(featuredBook);
                   }}
+                  disabled={loadingBookId === featuredBook.id}
                 >
                   <Ionicons
                     name={currentBook?.id === featuredBook.id && isPlaying ? 'pause' : 'play'}
@@ -137,7 +163,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                     color={Colors.background}
                   />
                   <Text style={styles.heroPlayBtnText}>
-                    {currentBook?.id === featuredBook.id && isPlaying ? 'Tạm dừng' : 'Nghe ngay'}
+                    {loadingBookId === featuredBook.id
+                      ? 'Đang tải...'
+                      : currentBook?.id === featuredBook.id && isPlaying
+                      ? 'Tạm dừng'
+                      : 'Nghe ngay'}
                   </Text>
                 </TouchableOpacity>
 
@@ -179,6 +209,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               key={book.id}
               book={book}
               isPlaying={isCurrent}
+              isLoading={loadingBookId === book.id}
               onPress={() => onSelectBook(book)}
               onPlayPress={() => onTogglePlay(book)}
             />
@@ -217,17 +248,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <Text style={styles.sectionBadge}>Tự Đổi Chương</Text>
       </View>
 
-      <View style={styles.verticalList}>
+      <View style={[styles.verticalList, isWide && styles.verticalListGrid]}>
         {filteredNovels.map((novel) => {
           const isCurrent = currentBook?.id === novel.id && isPlaying;
           return (
-            <NovelCard
+            <View
               key={novel.id}
-              novel={novel}
-              isPlaying={isCurrent}
-              onPress={() => onSelectBook(novel)}
-              onPlayPress={() => onTogglePlay(novel)}
-            />
+              style={[
+                styles.novelItemWrapper,
+                isWide && (isLargeScreen ? styles.novelItemWrapper3Col : styles.novelItemWrapper2Col),
+              ]}
+            >
+              <NovelCard
+                novel={novel}
+                isPlaying={isCurrent}
+                isLoading={loadingBookId === novel.id}
+                onPress={() => onSelectBook(novel)}
+                onPlayPress={() => onTogglePlay(novel)}
+              />
+            </View>
           );
         })}
       </View>
@@ -303,6 +342,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
+  heroCardWide: {
+    height: 280,
+  },
   heroImage: {
     width: '100%',
     height: '100%',
@@ -317,6 +359,9 @@ const styles = StyleSheet.create({
     padding: 20,
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(11, 15, 25, 0.65)',
+  },
+  heroOverlayWide: {
+    padding: 28,
   },
   heroTag: {
     flexDirection: 'row',
@@ -336,6 +381,10 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     letterSpacing: -0.5,
   },
+  heroTitleWide: {
+    fontSize: 28,
+    lineHeight: 34,
+  },
   heroAuthor: {
     fontSize: 13,
     color: Colors.textLight,
@@ -347,6 +396,11 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     lineHeight: 16,
     marginTop: 6,
+  },
+  heroDescWide: {
+    fontSize: 14,
+    lineHeight: 20,
+    maxWidth: 720,
   },
   heroActions: {
     flexDirection: 'row',
@@ -451,5 +505,19 @@ const styles = StyleSheet.create({
   },
   verticalList: {
     paddingHorizontal: 20,
+  },
+  verticalListGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+  },
+  novelItemWrapper: {
+    width: '100%',
+  },
+  novelItemWrapper2Col: {
+    width: '48.8%',
+  },
+  novelItemWrapper3Col: {
+    width: '32%',
   },
 });

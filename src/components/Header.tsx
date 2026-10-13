@@ -10,6 +10,8 @@ interface HeaderProps {
   onOpenImportModal: () => void;
   sleepTimerMinutes: number | null;
   onOpenSleepTimer: () => void;
+  isWide?: boolean;
+  activeTabTitle?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,24 +20,33 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenImportModal,
   sleepTimerMinutes,
   onOpenSleepTimer,
+  isWide = false,
+  activeTabTitle = 'Khám Phá',
 }) => {
   return (
-    <View style={styles.container}>
-      <View style={styles.brandContainer}>
-        <View style={styles.logoBadge}>
-          <Ionicons name="headset" size={20} color={Colors.primary} />
+    <View style={[styles.container, isWide && styles.containerWide]}>
+      {isWide ? (
+        <View style={styles.breadcrumbContainer}>
+          <Text style={styles.breadcrumbTitle}>{activeTabTitle}</Text>
+          <Text style={styles.breadcrumbSubtitle}>Kho Sách Nói & Truyện Chữ AI</Text>
         </View>
-        <View>
-          <View style={styles.titleRow}>
-            <Text style={styles.title}>Audio</Text>
-            <Text style={[styles.title, { color: Colors.primary }]}>Verse</Text>
-            <View style={styles.aiTag}>
-              <Text style={styles.aiTagText}>AI</Text>
-            </View>
+      ) : (
+        <View style={styles.brandContainer}>
+          <View style={styles.logoBadge}>
+            <Ionicons name="headset" size={20} color={Colors.primary} />
           </View>
-          <Text style={styles.subtitle}>Sách Nói & Truyện Chữ AI</Text>
+          <View>
+            <View style={styles.titleRow}>
+              <Text style={styles.title}>Audio</Text>
+              <Text style={[styles.title, { color: Colors.primary }]}>Verse</Text>
+              <View style={styles.aiTag}>
+                <Text style={styles.aiTagText}>AI</Text>
+              </View>
+            </View>
+            <Text style={styles.subtitle}>Sách Nói & Truyện Chữ AI</Text>
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={styles.actionsRow}>
         {/* Sleep Timer Indicator */}
@@ -54,15 +65,15 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </TouchableOpacity>
 
-        {/* Voice Selector Badge */}
+        {/* Storage / Audio Cache Button */}
         <TouchableOpacity
           style={styles.voiceBtn}
           onPress={onOpenVoiceSelector}
-          accessibilityLabel="Chọn giọng đọc"
+          accessibilityLabel="Quản lý bộ nhớ audio"
         >
-          <Ionicons name="mic" size={16} color={Colors.secondary} />
+          <Ionicons name="cloud-download-outline" size={16} color={Colors.secondary} />
           <Text style={styles.voiceBtnText} numberOfLines={1}>
-            {currentVoice.name.split(' (')[0]}
+            Bộ nhớ
           </Text>
         </TouchableOpacity>
 
@@ -88,6 +99,28 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 14,
     backgroundColor: Colors.background,
+  },
+  containerWide: {
+    paddingHorizontal: 24,
+    paddingTop: 18,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  breadcrumbContainer: {
+    justifyContent: 'center',
+  },
+  breadcrumbTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+    letterSpacing: -0.5,
+  },
+  breadcrumbSubtitle: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+    fontWeight: '500',
   },
   brandContainer: {
     flexDirection: 'row',

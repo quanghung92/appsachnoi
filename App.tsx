@@ -30,25 +30,43 @@ import { BatchQueueModal } from './src/components/BatchQueueModal';
 import { VoiceSelectorModal } from './src/components/VoiceSelectorModal';
 import { SleepTimerModal } from './src/components/SleepTimerModal';
 import { UrlImportModal } from './src/components/UrlImportModal';
+import { AudioChoiceModal } from './src/components/AudioChoiceModal';
 
 // Screens
 import { HomeScreen } from './src/screens/HomeScreen';
 import { SearchScreen } from './src/screens/SearchScreen';
 import { LibraryScreen } from './src/screens/LibraryScreen';
+import { QueueScreen } from './src/screens/QueueScreen';
 
 export default function App() {
   // Navigation
-  const [activeTab, setActiveTab] = useState<'home' | 'search' | 'library'>('home');
-  // Responsive: màn hình rộng (>=900px) dùng sidebar thay vì bottom nav
+  const [activeTab, setActiveTab] = useState<'home' | 'search' | 'library' | 'queue'>('home');
+  // Responsive: hỗ trợ tất cả kích thước màn hình (mobile < 768px, tablet 768-1024px, desktop >= 1024px)
   const { width } = useWindowDimensions();
-  const isWide = Platform.OS === 'web' && width >= 900;
+  const isWide = width >= 768;
+  const isTablet = isWide && width < 1024;
+  const isDesktop = width >= 1024;
   const [selectedCategory, setSelectedCategory] = useState<string>('Tất Cả');
+
+  const tabTitles: Record<string, string> = {
+    home: 'Khám Phá Sách & Truyện',
+    search: 'Tìm Kiếm Kho Sách',
+    library: 'Tủ Sách Của Tôi',
+    queue: 'Hàng Đợi Gen Audio',
+  };
+
+  const [audioChoiceState, setAudioChoiceState] = useState<{
+    book: Book;
+    chapter: Chapter;
+    text: string;
+    startSentenceIndex: number;
+  } | null>(null);
 
   // Book Data
   const [books, setBooks] = useState<Book[]>(DRIVE_BOOKS);
   const [novels, setNovels] = useState<Book[]>(WEB_NOVELS);
-  const [recentBooks, setRecentBooks] = useState<Book[]>([DRIVE_BOOKS[0], WEB_NOVELS[0]]);
-  const [savedBooks, setSavedBooks] = useState<Book[]>([DRIVE_BOOKS[1], WEB_NOVELS[1]]);
+  const [recentBooks, setRecentBooks] = useState<Book[]>([]);
+  const [savedBooks, setSavedBooks] = useState<Book[]>([]);
 
   // Playback State
   const [currentBook, setCurrentBook] = useState<Book | null>(DRIVE_BOOKS[0]);
@@ -75,6 +93,7 @@ export default function App() {
 
   // Đọc tiếp (PLAN B2)
   const [lastProgress, setLastProgress] = useState<ReadingProgress | null>(null);
+  const [loadingBookId, setLoadingBookId] = useState<string | null>(null);
 
   // Trạng thái audio từng chương trên batch server (đồng bộ hiển thị với server)
   const [chapterAudioState, setChapterAudioState] = useState<{
@@ -82,22 +101,68 @@ export default function App() {
     pending: Set<string>;
   }>({ ready: new Set<string>(), pending: new Set<string>() });
 
-  // Nạp sách đã lưu + tiến độ nghe khi mở app
+  // Nạp sách đã lưu + tiến độ nghe khi mở app (phục hồi sách/chương đang nghe dở trên F5)
   useEffect(() => {
     (async () => {
       try {
+        let loadedWebNovels: Book[] = [];
+        let loadedOthers: Book[] = [];
         const saved = await storageService.getSavedBooks();
-        if (saved.length > 0) {
+        if (saved && saved.length > 0) {
           const webNovels = saved.filter(b => b.type === 'web_novel');
           const others = saved.filter(b => b.type !== 'web_novel');
-          if (webNovels.length > 0) setNovels(prev => [...webNovels, ...prev]);
+          if (webNovels.length > 0) {
+            setNovels(prev => [...webNovels, ...prev]);
+            loadedWebNovels = webNovels;
+          }
           if (others.length > 0) {
             setBooks(prev => [...others, ...prev]);
-            setSavedBooks(prev => [...others, ...prev]);
+            loadedOthers = others;
           }
+          setSavedBooks(saved);
+        } else {
+          setSavedBooks([]);
         }
+
+        const allPool = [...loadedOthers, ...loadedWebNovels, ...DRIVE_BOOKS, ...WEB_NOVELS];
+
+        // Nạp lịch sử các sách đã nghe dở từ AsyncStorage
+        try {
+          const rawRecent = await AsyncStorage.getItem('@audioverse/recent_book_ids');
+          const recentIds: string[] = rawRecent ? JSON.parse(rawRecent) : [];
+          if (recentIds.length > 0) {
+            const matched = recentIds
+              .map(id => allPool.find(b => b.id === id))
+              .filter((b): b is Book => Boolean(b));
+            setRecentBooks(matched);
+          } else {
+            setRecentBooks([]);
+          }
+        } catch {}
+
         const progress = await storageService.getLastProgress();
         setLastProgress(progress);
+        if (progress) {
+          const found = allPool.find(b => b.id === progress.bookId);
+          if (found) {
+            setCurrentBook(found);
+            const foundCh = found.chapters.find(c => c.id === progress.chapterId) || found.chapters[0];
+            if (foundCh) setCurrentChapter(foundCh);
+            if (progress.positionMs && progress.positionMs > 0) {
+              setPositionMs(progress.positionMs);
+            }
+            // Đảm bảo cuốn đang nghe xuất hiện ở đầu danh sách đang nghe dở
+            setRecentBooks(prev => {
+              if (prev.some(b => b.id === found.id)) return prev;
+              const updated = [found, ...prev].slice(0, 10);
+              AsyncStorage.setItem(
+                '@audioverse/recent_book_ids',
+                JSON.stringify(updated.map(b => b.id))
+              ).catch(() => {});
+              return updated;
+            });
+          }
+        }
       } catch (e) {
         console.log('[App] load storage error:', e);
       }
@@ -125,9 +190,19 @@ export default function App() {
     // If tapping another book
     if (bookToPlay.id !== currentBook?.id) {
       setCurrentBook(bookToPlay);
-      const firstChapter = bookToPlay.chapters[0];
-      setCurrentChapter(firstChapter);
-      await startReading(firstChapter.content, bookToPlay, firstChapter);
+      let targetChapter = bookToPlay.chapters[0];
+      let resumeMs = 0;
+      let resumeSentence = 0;
+      if (lastProgress && lastProgress.bookId === bookToPlay.id) {
+        const found = bookToPlay.chapters.find((c) => c.id === lastProgress.chapterId);
+        if (found) {
+          targetChapter = found;
+          resumeMs = lastProgress.positionMs || 0;
+          resumeSentence = lastProgress.sentenceIndex > 0 ? lastProgress.sentenceIndex : 0;
+        }
+      }
+      setCurrentChapter(targetChapter);
+      await startReading(targetChapter.content, bookToPlay, targetChapter, resumeSentence, resumeMs);
       addToRecent(bookToPlay);
       return;
     }
@@ -142,7 +217,15 @@ export default function App() {
       setIsPlaying(true);
     } else {
       if (currentChapter) {
-        await startReading(currentChapter.content, bookToPlay, currentChapter);
+        const resumeMs =
+          lastProgress && lastProgress.bookId === bookToPlay.id && lastProgress.chapterId === currentChapter.id
+            ? lastProgress.positionMs || positionMs || 0
+            : positionMs || 0;
+        const resumeSentence =
+          lastProgress && lastProgress.bookId === bookToPlay.id && lastProgress.chapterId === currentChapter.id && lastProgress.sentenceIndex > 0
+            ? lastProgress.sentenceIndex
+            : 0;
+        await startReading(currentChapter.content, bookToPlay, currentChapter, resumeSentence, resumeMs);
       }
     }
   };
@@ -155,11 +238,27 @@ export default function App() {
   const tryPlayChapterAudio = async (book: Book, chapter: Chapter, startMs: number = 0): Promise<boolean> => {
     if (!batchService.isConfigured()) return false;
     try {
+      setLoadingBookId(book.id);
       const localUri = await batchService.getChapterAudioFile(book.id, chapter.id);
       if (!localUri) return false;
 
       setIsPlaying(true);
       ttsService.setNowPlaying(book.title, chapter.title);
+
+      // Parse thời lượng dự kiến từ metadata chương (ví dụ: "09:20" -> 560000ms)
+      let parsedDurMs = 0;
+      if (chapter.duration) {
+        const parts = chapter.duration.split(':').map(Number);
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          parsedDurMs = (parts[0] * 60 + parts[1]) * 1000;
+        } else if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+          parsedDurMs = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+        }
+      }
+      if (parsedDurMs > 0) {
+        setDurationMs(parsedDurMs);
+      }
+
       await ttsService.playChapterAudio(
         localUri,
         () => {
@@ -169,9 +268,9 @@ export default function App() {
           console.log('[App] Chapter audio error:', err);
           setIsPlaying(false);
         },
-        (posMs) => {
-          // Lưu tiến độ theo mili-giây trong chương (throttle ~5s trong service gọi,
-          // ở đây lưu mỗi lần callback để đơn giản vì service đã throttle 2s).
+        (posMs, durMs) => {
+          setPositionMs(posMs);
+          if (durMs > 0) setDurationMs(durMs);
           const progress: ReadingProgress = {
             bookId: book.id,
             bookTitle: book.title,
@@ -186,59 +285,59 @@ export default function App() {
           setLastProgress(progress);
           storageService.saveProgress(progress).catch(() => {});
         },
-        startMs
+        startMs,
+        parsedDurMs
       );
       return true;
     } catch (e) {
       console.log('[App] tryPlayChapterAudio failed:', e);
       return false;
+    } finally {
+      setLoadingBookId(null);
     }
   };
 
   /**
    * Đẩy chương hiện tại + 2 chương tiếp theo vào hàng đợi batch (cuối hàng).
-   * Chỉ chạy khi bật "Tự động batch sách đang nghe". Bỏ qua chương đã có audio
-   * hoặc đang chờ gen để tránh trùng. Server/worker tự lấy nội dung
-   * (cào URL truyện / tra text sách trong Volume), tất cả dùng Kokoro (duc_an).
+   * Bỏ qua chương đã có audio hoặc đang chờ gen để tránh trùng.
    */
-  const enqueueChapterForBatch = (book: Book, chapter: Chapter) => {
-    (async () => {
-      try {
-        if (!batchService.isConfigured()) return;
-        if (!(await batchService.getAutoBatch())) return;
-        // Server batch chỉ chạy Kokoro (Gemini đã tắt từ đêm 11/10) — mọi loại nội dung đều dùng Kokoro.
-        const engine: BatchEngine = 'kokoro';
-        const voice = await getKokoroVoiceForBook(book.id);
-        const [index, pending] = await Promise.all([
-          batchService.getChapterIndex(book.id),
-          batchService.getPendingChapters(book.id),
-        ]);
-        const ready = new Set(Object.keys(index));
-        const idx = book.chapters.findIndex((c) => c.id === chapter.id);
-        const items: {
-          book_id: string; chapter_id: string; title: string;
-          url?: string; engine: BatchEngine; voice?: string;
-        }[] = [];
-        for (let i = Math.max(0, idx); i < Math.min(idx + 3, book.chapters.length); i++) {
-          const ch = book.chapters[i];
-          if (ready.has(ch.id) || ready.has(toIndexChapterId(ch.id)) || pending.has(ch.id)) continue;
-          items.push({
-            book_id: book.id,
-            chapter_id: ch.id,
-            title: ch.title,
-            url: ch.url || crawlerService.buildChapterUrl(book.sourceUrl, ch.chapterNumber || i + 1),
-            engine,
-            voice,
-          });
-        }
-        if (items.length > 0) {
-          const added = await batchService.enqueueChapters(items);
-          console.log(`[App] Đã đẩy ${added} chương vào hàng đợi batch (${engine}).`);
-        }
-      } catch (e) {
-        console.log('[App] enqueue batch error:', e);
+  const enqueueChapterForBatch = async (book: Book, chapter: Chapter): Promise<number> => {
+    try {
+      if (!batchService.isConfigured()) return 0;
+      const engine: BatchEngine = 'kokoro';
+      const voice = await getKokoroVoiceForBook(book.id);
+      const [index, pending] = await Promise.all([
+        batchService.getChapterIndex(book.id),
+        batchService.getPendingChapters(book.id),
+      ]);
+      const ready = new Set(Object.keys(index));
+      const idx = book.chapters.findIndex((c) => c.id === chapter.id);
+      const items: {
+        book_id: string; chapter_id: string; title: string;
+        url?: string; engine: BatchEngine; voice?: string;
+      }[] = [];
+      for (let i = Math.max(0, idx); i < Math.min(idx + 3, book.chapters.length); i++) {
+        const ch = book.chapters[i];
+        if (ready.has(ch.id) || ready.has(toIndexChapterId(ch.id)) || pending.has(ch.id)) continue;
+        items.push({
+          book_id: book.id,
+          chapter_id: ch.id,
+          title: ch.title,
+          url: ch.url || crawlerService.buildChapterUrl(book.sourceUrl, ch.chapterNumber || i + 1),
+          engine,
+          voice,
+        });
       }
-    })();
+      if (items.length > 0) {
+        const added = await batchService.enqueueChapters(items);
+        console.log(`[App] Đã đẩy ${added} chương vào hàng đợi batch (${engine}).`);
+        return added;
+      }
+      return 0;
+    } catch (e) {
+      console.log('[App] enqueue batch error:', e);
+      return 0;
+    }
   };
 
   /** Giọng Kokoro khóa theo từng sách (1 sách 1 giọng, không pha trộn). */
@@ -306,38 +405,7 @@ export default function App() {
     }
   };
 
-  const startReading = async (text: string, book?: Book, chapter?: Chapter, startSentenceIndex: number = 0) => {
-    // Kiến trúc batch: app vào THẲNG Drive lấy MP3 chương, không qua Modal realtime.
-    if (book && chapter && batchService.isConfigured() && startSentenceIndex <= 0) {
-      const played = await tryPlayChapterAudio(book, chapter, 0);
-      if (played) return;
-      // Chưa có audio -> đẩy vào hàng đợi + báo rõ. KHÔNG đọc tạm từng câu.
-      enqueueChapterForBatch(book, chapter);
-      setIsPlaying(false);
-      Alert.alert(
-        'Chưa có audio',
-        `"${chapter.title}" chưa được gen. Đã xếp vào hàng đợi — worker tự gen trong vòng 1 giờ.`,
-        [
-          { text: 'Để worker tự gen', style: 'cancel' },
-          {
-            text: 'Gen ngay',
-            onPress: async () => {
-              const ok = await batchService.triggerNow(5);
-              if (ok) batchService.invalidateIndexCache();
-              Alert.alert(
-                ok ? 'Đã kích hoạt' : 'Lỗi',
-                ok
-                  ? 'Server đang gen, quay lại sau vài phút rồi mở lại chương này.'
-                  : 'Không gọi được server batch.'
-              );
-            },
-          },
-        ]
-      );
-      return;
-    }
-
-    // Batch chưa cấu hình: giữ luồng Kokoro realtime cũ (giai đoạn chuyển đổi).
+  const executeRealtimeReading = async (text: string, book?: Book, chapter?: Chapter, startSentenceIndex: number = 0) => {
     let readingText = text;
     if (book && chapter) {
       try {
@@ -387,6 +455,33 @@ export default function App() {
     );
   };
 
+  const startReading = async (
+    text: string,
+    book?: Book,
+    chapter?: Chapter,
+    startSentenceIndex: number = 0,
+    startMs: number = 0
+  ) => {
+    try {
+      if (book) setLoadingBookId(book.id);
+      // 1. Nếu có file MP3 trên Drive -> phát ngay bằng Drive audio player
+      if (book && chapter && batchService.isConfigured() && startSentenceIndex <= 0) {
+        const played = await tryPlayChapterAudio(book, chapter, startMs);
+        if (played) return;
+
+        // 2. Chưa có audio trên Drive -> Hiển thị popup lựa chọn rõ ràng:
+        // Không tự ý chặn và không tự ý xếp hàng đợi mà không hỏi người dùng
+        setAudioChoiceState({ book, chapter, text, startSentenceIndex });
+        return;
+      }
+
+      // 3. Đọc ngay bằng TTS trực tiếp
+      await executeRealtimeReading(text, book, chapter, startSentenceIndex);
+    } finally {
+      setLoadingBookId(null);
+    }
+  };
+
   /** Tiếp tục nghe từ chỗ đang dở (PLAN B2). */
   const handleResume = async () => {
     if (!lastProgress) return;
@@ -407,14 +502,15 @@ export default function App() {
       // Không có audio sẵn -> rớt về Kokoro realtime từ đầu chương.
       const played = await tryPlayChapterAudio(book, chapter, lastProgress.positionMs || 0);
       if (!played) {
-        await startReading(chapter.content, book, chapter, 0);
+        await startReading(chapter.content, book, chapter, 0, 0);
       }
     } else {
       await startReading(
         chapter.content,
         book,
         chapter,
-        lastProgress.sentenceIndex
+        lastProgress.sentenceIndex,
+        0
       );
     }
     setIsFullPlayerVisible(true);
@@ -430,6 +526,38 @@ export default function App() {
           batchService.getPendingChapters(currentBook.id),
         ]);
         setChapterAudioState({ ready: new Set(Object.keys(index)), pending });
+
+        // Tự động đồng bộ các chương đã gen trên server nếu sách có nhiều chương hơn (vd: Phàm Nhân Tu Tiên 459 chương)
+        const indexKeys = Object.keys(index);
+        if (indexKeys.length > currentBook.chapters.length) {
+          const sortedKeys = indexKeys.sort((a, b) => {
+            const na = parseInt(a.replace(/\D/g, ''), 10) || 0;
+            const nb = parseInt(b.replace(/\D/g, ''), 10) || 0;
+            return na - nb;
+          });
+          const existingIds = new Set(currentBook.chapters.map(c => toIndexChapterId(c.id)));
+          const additionalChapters: Chapter[] = [];
+          for (const k of sortedKeys) {
+            if (!existingIds.has(k)) {
+              const item = index[k];
+              const chapNum = parseInt(k.replace(/\D/g, ''), 10) || 0;
+              additionalChapters.push({
+                id: `${currentBook.id}_${k}`,
+                chapterNumber: chapNum,
+                title: item.title || `Chương ${chapNum}`,
+                content: item.title || `Chương ${chapNum}`,
+                duration: '10:00',
+              });
+            }
+          }
+          if (additionalChapters.length > 0) {
+            const updatedBook = {
+              ...currentBook,
+              chapters: [...currentBook.chapters, ...additionalChapters],
+            };
+            setCurrentBook(updatedBook);
+          }
+        }
       } catch {}
     } else {
       setChapterAudioState({ ready: new Set<string>(), pending: new Set<string>() });
@@ -438,6 +566,38 @@ export default function App() {
 
   /** Xóa sách khỏi tủ (kèm xác nhận, PLAN B2). */
   const handleDeleteBook = (book: Book) => {
+    const doDelete = async () => {
+      await storageService.deleteBook(book.id);
+      // Đồng bộ: xóa luôn hàng đợi + audio trên batch server / Drive
+      batchService.removeBook(book.id).catch(() => {});
+      setBooks((prev) => prev.filter((b) => b.id !== book.id));
+      setNovels((prev) => prev.filter((b) => b.id !== book.id));
+      setSavedBooks((prev) => prev.filter((b) => b.id !== book.id));
+      setRecentBooks((prev) => {
+        const updated = prev.filter((b) => b.id !== book.id);
+        AsyncStorage.setItem(
+          '@audioverse/recent_book_ids',
+          JSON.stringify(updated.map((b) => b.id))
+        ).catch(() => {});
+        return updated;
+      });
+      if (currentBook?.id === book.id) {
+        ttsService.stop();
+        setCurrentBook(null);
+        setCurrentChapter(null);
+        setIsPlaying(false);
+      }
+      const progress = await storageService.getLastProgress();
+      setLastProgress(progress);
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Xóa "${book.title}" khỏi tủ sách? Toàn bộ nội dung và tiến độ nghe sẽ bị xóa khỏi máy.`)) {
+        doDelete();
+      }
+      return;
+    }
+
     Alert.alert(
       'Xóa sách',
       `Xóa "${book.title}" khỏi tủ sách? Toàn bộ nội dung và tiến độ nghe sẽ bị xóa khỏi máy.`,
@@ -446,23 +606,7 @@ export default function App() {
         {
           text: 'Xóa',
           style: 'destructive',
-          onPress: async () => {
-            await storageService.deleteBook(book.id);
-            // Đồng bộ: xóa luôn hàng đợi + audio trên batch server / Drive
-            batchService.removeBook(book.id).catch(() => {});
-            setBooks(prev => prev.filter(b => b.id !== book.id));
-            setNovels(prev => prev.filter(b => b.id !== book.id));
-            setSavedBooks(prev => prev.filter(b => b.id !== book.id));
-            setRecentBooks(prev => prev.filter(b => b.id !== book.id));
-            if (currentBook?.id === book.id) {
-              ttsService.stop();
-              setCurrentBook(null);
-              setCurrentChapter(null);
-              setIsPlaying(false);
-            }
-            const progress = await storageService.getLastProgress();
-            setLastProgress(progress);
-          },
+          onPress: doDelete,
         },
       ]
     );
@@ -470,7 +614,11 @@ export default function App() {
 
   const handleSelectBook = (book: Book, chapter?: Chapter) => {
     setCurrentBook(book);
-    const targetChapter = chapter || book.chapters[0];
+    let targetChapter = chapter || book.chapters[0];
+    if (!chapter && lastProgress && lastProgress.bookId === book.id) {
+      const found = book.chapters.find((c) => c.id === lastProgress.chapterId);
+      if (found) targetChapter = found;
+    }
     setCurrentChapter(targetChapter);
     setIsFullPlayerVisible(true);
     addToRecent(book);
@@ -479,7 +627,7 @@ export default function App() {
   const handleSelectChapter = (chapter: Chapter) => {
     setCurrentChapter(chapter);
     if (currentBook) {
-      startReading(chapter.content, currentBook, chapter);
+      startReading(chapter.content, currentBook, chapter, 0, 0);
     }
   };
 
@@ -573,8 +721,42 @@ export default function App() {
   const addToRecent = (book: Book) => {
     setRecentBooks((prev) => {
       const filtered = prev.filter((b) => b.id !== book.id);
-      return [book, ...filtered].slice(0, 10);
+      const updated = [book, ...filtered].slice(0, 10);
+      AsyncStorage.setItem(
+        '@audioverse/recent_book_ids',
+        JSON.stringify(updated.map((b) => b.id))
+      ).catch(() => {});
+      return updated;
     });
+  };
+
+  const handleRemoveRecentBook = (book: Book) => {
+    const doRemove = () => {
+      setRecentBooks((prev) => {
+        const updated = prev.filter((b) => b.id !== book.id);
+        AsyncStorage.setItem(
+          '@audioverse/recent_book_ids',
+          JSON.stringify(updated.map((b) => b.id))
+        ).catch(() => {});
+        return updated;
+      });
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Xóa "${book.title}" khỏi danh sách đang nghe dở?`)) {
+        doRemove();
+      }
+      return;
+    }
+
+    Alert.alert(
+      'Xóa khỏi lịch sử',
+      `Xóa "${book.title}" khỏi danh sách đang nghe dở?`,
+      [
+        { text: 'Hủy', style: 'cancel' },
+        { text: 'Xóa', style: 'destructive', onPress: doRemove },
+      ]
+    );
   };
 
   const allBooksList = [...books, ...novels];
@@ -586,7 +768,7 @@ export default function App() {
       <View style={[styles.appContainer, isWide && styles.appContainerWide]}>
         {/* Sidebar cho web rộng */}
         {isWide && (
-          <View style={styles.sidebar}>
+          <View style={[styles.sidebar, isTablet && styles.sidebarTablet]}>
             <View style={styles.sidebarLogo}>
               <Ionicons name="book" size={28} color={Colors.primary} />
               <Text style={styles.sidebarLogoText}>AudioVerse</Text>
@@ -596,6 +778,7 @@ export default function App() {
                 { key: 'home', label: 'Khám Phá', icon: 'home', iconOutline: 'home-outline' },
                 { key: 'search', label: 'Tìm Kiếm', icon: 'search', iconOutline: 'search-outline' },
                 { key: 'library', label: 'Tủ Sách', icon: 'library', iconOutline: 'library-outline' },
+                { key: 'queue', label: 'Hàng Đợi', icon: 'cloud-upload', iconOutline: 'cloud-upload-outline' },
               ] as const
             ).map((tab) => (
               <TouchableOpacity
@@ -623,24 +806,28 @@ export default function App() {
         )}
 
         {/* Cột nội dung chính */}
-        <View style={[styles.mainColumn, isWide && styles.mainColumnWide]}>
-        {/* Top Header */}
-        <Header
-          currentVoice={currentVoice}
-          onOpenVoiceSelector={() => setIsVoiceSelectorVisible(true)}
-          onOpenImportModal={() => setIsImportModalVisible(true)}
-          sleepTimerMinutes={sleepTimerMinutes}
-          onOpenSleepTimer={() => setIsSleepTimerVisible(true)}
-        />
+        <View style={styles.mainColumn}>
+          <View style={styles.mainColumnInner}>
+            {/* Top Header */}
+            <Header
+              currentVoice={currentVoice}
+              onOpenVoiceSelector={() => setIsVoiceSelectorVisible(true)}
+              onOpenImportModal={() => setIsImportModalVisible(true)}
+              sleepTimerMinutes={sleepTimerMinutes}
+              onOpenSleepTimer={() => setIsSleepTimerVisible(true)}
+              isWide={isWide}
+              activeTabTitle={tabTitles[activeTab]}
+            />
 
-        {/* Screen Switcher */}
-        <View style={styles.screenContainer}>
+            {/* Screen Switcher */}
+            <View style={styles.screenContainer}>
           {activeTab === 'home' && (
             <HomeScreen
               books={books}
               novels={novels}
               currentBook={currentBook}
               isPlaying={isPlaying}
+              loadingBookId={loadingBookId}
               selectedCategory={selectedCategory}
               lastProgress={lastProgress}
               onSelectCategory={setSelectedCategory}
@@ -672,22 +859,35 @@ export default function App() {
               onTogglePlay={handleTogglePlay}
               onOpenImportModal={() => setIsImportModalVisible(true)}
               onDeleteBook={handleDeleteBook}
+              onRemoveRecentBook={handleRemoveRecentBook}
+            />
+          )}
+
+          {activeTab === 'queue' && (
+            <QueueScreen
+              books={allBooksList}
+              onSelectBook={handleSelectBook}
+              onBatchBook={handleBatchBook}
             />
           )}
         </View>
 
         {/* Floating Mini Player */}
         {currentBook && currentChapter && (
-          <MiniPlayer
-            book={currentBook}
-            chapter={currentChapter}
-            isPlaying={isPlaying}
-            positionMs={positionMs}
-            durationMs={durationMs}
-            onPress={() => setIsFullPlayerVisible(true)}
-            onPlayPause={() => handleTogglePlay()}
-            onNextChapter={handleNextChapter}
-          />
+          <View style={[styles.miniPlayerBox, isWide && styles.miniPlayerBoxWide]}>
+            <MiniPlayer
+              book={currentBook}
+              chapter={currentChapter}
+              isPlaying={isPlaying}
+              isLoading={loadingBookId !== null && (loadingBookId === currentBook?.id || loadingBookId === 'current')}
+              positionMs={positionMs}
+              durationMs={durationMs}
+              onPress={() => setIsFullPlayerVisible(true)}
+              onPlayPause={() => handleTogglePlay()}
+              onNextChapter={handleNextChapter}
+              onSeek={handleSeek}
+            />
+          </View>
         )}
 
         {/* Navigation: bottom nav trên mobile (web rộng dùng sidebar) */}
@@ -752,8 +952,29 @@ export default function App() {
                 Tủ Sách
               </Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.navTab}
+              onPress={() => setActiveTab('queue')}
+              accessibilityLabel="Hàng đợi"
+            >
+              <Ionicons
+                name={activeTab === 'queue' ? 'cloud-upload' : 'cloud-upload-outline'}
+                size={22}
+                color={activeTab === 'queue' ? Colors.primary : Colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.navLabel,
+                  activeTab === 'queue' && { color: Colors.primary, fontWeight: '700' },
+                ]}
+              >
+                Hàng Đợi
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
+          </View>{/* mainColumnInner */}
         </View>{/* mainColumn */}
       </View>
 
@@ -799,13 +1020,10 @@ export default function App() {
         onSelectChapter={handleSelectChapter}
       />
 
-      {/* Voice Selector Modal */}
+      {/* Audio Storage & Offline Manager Modal */}
       <VoiceSelectorModal
         visible={isVoiceSelectorVisible}
-        selectedVoice={currentVoice}
         onClose={() => setIsVoiceSelectorVisible(false)}
-        onSelectVoice={handleSelectVoice}
-        onTestVoice={handleTestVoice}
       />
 
       {/* Sleep Timer Modal */}
@@ -822,6 +1040,34 @@ export default function App() {
         onClose={() => setIsImportModalVisible(false)}
         onBookImported={handleBookImported}
       />
+
+      {/* Audio Choice Modal khi chương chưa có audio trên Drive */}
+      {audioChoiceState && (
+        <AudioChoiceModal
+          visible={!!audioChoiceState}
+          book={audioChoiceState.book}
+          chapter={audioChoiceState.chapter}
+          onPlayRealtime={() => {
+            const { text, book, chapter, startSentenceIndex } = audioChoiceState;
+            setAudioChoiceState(null);
+            executeRealtimeReading(text, book, chapter, startSentenceIndex);
+          }}
+          onEnqueueBatch={async () => {
+            const { book, chapter } = audioChoiceState;
+            setAudioChoiceState(null);
+            const added = await enqueueChapterForBatch(book, chapter);
+            Alert.alert(
+              'Đã đưa vào hàng đợi',
+              `Đã thêm ${added > 0 ? added : 1} chương vào hàng đợi gen Drive. Bạn có thể mở tab "Hàng Đợi" để theo dõi hoặc bấm "Gen ngay".`,
+              [
+                { text: 'Đóng', style: 'cancel' },
+                { text: 'Xem hàng đợi', onPress: () => setActiveTab('queue') },
+              ]
+            );
+          }}
+          onClose={() => setAudioChoiceState(null)}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -840,17 +1086,37 @@ const styles = StyleSheet.create({
   },
   mainColumn: {
     flex: 1,
+    height: '100%',
+    backgroundColor: Colors.background,
+    overflow: 'hidden',
   },
-  mainColumnWide: {
-    maxWidth: 1200,
+  mainColumnInner: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 1440,
+    alignSelf: 'center',
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
   },
   sidebar: {
-    width: 220,
+    width: 240,
     backgroundColor: Colors.surface,
     borderRightWidth: 1,
     borderRightColor: Colors.border,
     paddingTop: 24,
     paddingHorizontal: 12,
+  },
+  sidebarTablet: {
+    width: 200,
+    paddingHorizontal: 8,
+  },
+  miniPlayerBox: {
+    width: '100%',
+  },
+  miniPlayerBoxWide: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   sidebarLogo: {
     flexDirection: 'row',

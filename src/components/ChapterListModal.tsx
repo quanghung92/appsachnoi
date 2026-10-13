@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
 import { Book, Chapter } from '../types';
@@ -25,12 +25,15 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
   onClose,
   onSelectChapter,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+
   if (!book) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
-        <View style={styles.sheet}>
+    <Modal visible={visible} animationType={isWide ? 'fade' : 'slide'} transparent>
+      <View style={[styles.overlay, isWide && styles.overlayWide]}>
+        <View style={[styles.sheet, isWide && styles.sheetWide]}>
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Danh Sách Chương</Text>
@@ -101,12 +104,26 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
+  overlayWide: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
   sheet: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '75%',
     paddingBottom: 24,
+  },
+  sheetWide: {
+    maxWidth: 580,
+    width: '100%',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    maxHeight: '82%',
+    overflow: 'hidden',
   },
   header: {
     flexDirection: 'row',

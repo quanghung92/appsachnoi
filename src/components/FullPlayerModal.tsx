@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
@@ -36,8 +36,6 @@ interface FullPlayerModalProps {
   onOpenBatchQueue: () => void;
 }
 
-const { width } = Dimensions.get('window');
-
 export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   visible,
   book,
@@ -59,6 +57,10 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   onOpenSleepTimer,
   onOpenBatchQueue,
 }) => {
+  const { width, height } = useWindowDimensions();
+  const isWide = width >= 768;
+  const artworkSize = Math.min(width * 0.68, height * 0.35, 270);
+
   const [showTextReader, setShowTextReader] = useState<boolean>(false);
 
   if (!book || !chapter) return null;
@@ -71,51 +73,52 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
-      <View style={styles.container}>
-        {/* Top bar */}
-        <View style={styles.topBar}>
-          <TouchableOpacity onPress={onClose} style={styles.iconBtn} accessibilityLabel="Thu nhỏ">
-            <Ionicons name="chevron-down" size={28} color={Colors.textPrimary} />
-          </TouchableOpacity>
+    <Modal visible={visible} animationType={isWide ? 'fade' : 'slide'} transparent={isWide}>
+      <View style={[styles.container, isWide && styles.containerWide]}>
+        <View style={[styles.dialogCard, isWide && styles.dialogCardWide]}>
+          {/* Top bar */}
+          <View style={[styles.topBar, isWide && styles.topBarWide]}>
+            <TouchableOpacity onPress={onClose} style={styles.iconBtn} accessibilityLabel="Thu nhỏ">
+              <Ionicons name="chevron-down" size={28} color={Colors.textPrimary} />
+            </TouchableOpacity>
 
-          <View style={styles.topTitleBox}>
-            <Text style={styles.topSubtitle}>ĐANG PHÁT AUDIO</Text>
-            <Text style={styles.topTitle} numberOfLines={1}>
-              {book.category}
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            onPress={() => setShowTextReader(!showTextReader)}
-            style={[styles.iconBtn, showTextReader && styles.activeReaderBtn]}
-            accessibilityLabel="Đọc văn bản"
-          >
-            <Ionicons
-              name={showTextReader ? 'document-text' : 'document-text-outline'}
-              size={24}
-              color={showTextReader ? Colors.primary : Colors.textPrimary}
-            />
-          </TouchableOpacity>
-        </View>
-
-        {showTextReader ? (
-          /* Text Reading Mode */
-          <View style={styles.readerContainer}>
-            <View style={styles.readerHeader}>
-              <Text style={styles.readerTitle}>{chapter.title}</Text>
-              <Text style={styles.readerSubtitle}>{book.title}</Text>
+            <View style={styles.topTitleBox}>
+              <Text style={styles.topSubtitle}>ĐANG PHÁT AUDIO</Text>
+              <Text style={styles.topTitle} numberOfLines={1}>
+                {book.category}
+              </Text>
             </View>
-            <ScrollView style={styles.readerScroll} showsVerticalScrollIndicator={false}>
-              <Text style={styles.readerContent}>{chapter.content}</Text>
-            </ScrollView>
+
+            <TouchableOpacity
+              onPress={() => setShowTextReader(!showTextReader)}
+              style={[styles.iconBtn, showTextReader && styles.activeReaderBtn]}
+              accessibilityLabel="Đọc văn bản"
+            >
+              <Ionicons
+                name={showTextReader ? 'document-text' : 'document-text-outline'}
+                size={24}
+                color={showTextReader ? Colors.primary : Colors.textPrimary}
+              />
+            </TouchableOpacity>
           </View>
-        ) : (
-          /* Standard Player Cover Mode */
-          <View style={styles.mainContent}>
-            {/* Cover Artwork */}
-            <View style={styles.artworkContainer}>
-              <Image source={{ uri: book.coverUrl }} style={styles.artwork} resizeMode="cover" />
+
+          {showTextReader ? (
+            /* Text Reading Mode */
+            <View style={styles.readerContainer}>
+              <View style={styles.readerHeader}>
+                <Text style={styles.readerTitle}>{chapter.title}</Text>
+                <Text style={styles.readerSubtitle}>{book.title}</Text>
+              </View>
+              <ScrollView style={styles.readerScroll} showsVerticalScrollIndicator={false}>
+                <Text style={styles.readerContent}>{chapter.content}</Text>
+              </ScrollView>
+            </View>
+          ) : (
+            /* Standard Player Cover Mode */
+            <View style={styles.mainContent}>
+              {/* Cover Artwork */}
+              <View style={[styles.artworkContainer, { width: artworkSize, height: artworkSize * 1.2 }]}>
+                <Image source={{ uri: book.coverUrl }} style={styles.artwork} resizeMode="cover" />
               {isPlaying && (
                 <View style={styles.pulsingGlow}>
                   <View style={styles.soundWaves}>
@@ -143,7 +146,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
           <Slider
             style={styles.slider}
             minimumValue={0}
-            maximumValue={Math.max(durationMs, 1000)}
+            maximumValue={Math.max(durationMs > 0 ? durationMs : 60000, positionMs, 1000)}
             value={positionMs}
             onSlidingComplete={onSeek}
             minimumTrackTintColor={Colors.primary}
@@ -152,7 +155,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
           />
           <View style={styles.timeRow}>
             <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
-            <Text style={styles.timeText}>{formatTime(durationMs)}</Text>
+            <Text style={styles.timeText}>{formatTime(Math.max(durationMs > 0 ? durationMs : 60000, positionMs))}</Text>
           </View>
         </View>
 
@@ -220,12 +223,10 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
             <Text style={styles.bottomActionLabel}>Tốc độ</Text>
           </TouchableOpacity>
 
-          {/* Voice Switcher */}
+          {/* Audio Storage / Cache */}
           <TouchableOpacity style={styles.bottomAction} onPress={onOpenVoiceSelector}>
-            <Ionicons name="mic" size={20} color={Colors.secondary} />
-            <Text style={styles.bottomActionLabel}>
-              {currentVoice.gender === 'female' ? 'Hoài My' : 'Nam Minh'}
-            </Text>
+            <Ionicons name="cloud-download-outline" size={20} color={Colors.secondary} />
+            <Text style={styles.bottomActionLabel}>Bộ nhớ</Text>
           </TouchableOpacity>
 
           {/* Sleep Timer */}
@@ -252,7 +253,8 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
             <Text style={styles.bottomActionLabel}>Hàng đợi</Text>
           </TouchableOpacity>
         </View>
-      </View>
+        </View>{/* dialogCard */}
+      </View>{/* container */}
     </Modal>
   );
 };
@@ -261,8 +263,34 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  containerWide: {
+    backgroundColor: 'rgba(5, 7, 15, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  dialogCard: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: Colors.background,
     justifyContent: 'space-between',
     paddingBottom: 28,
+  },
+  dialogCardWide: {
+    maxWidth: 520,
+    maxHeight: '92%',
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.5,
+    shadowRadius: 28,
+    elevation: 20,
+    paddingBottom: 20,
   },
   topBar: {
     flexDirection: 'row',
@@ -271,6 +299,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 48,
     paddingBottom: 16,
+  },
+  topBarWide: {
+    paddingTop: 16,
+    paddingBottom: 12,
   },
   topTitleBox: {
     alignItems: 'center',
@@ -307,8 +339,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   artworkContainer: {
-    width: width * 0.72,
-    height: width * 0.95,
     borderRadius: 24,
     overflow: 'hidden',
     position: 'relative',

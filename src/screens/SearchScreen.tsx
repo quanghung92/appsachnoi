@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
@@ -30,6 +31,10 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
   onTogglePlay,
   onOpenImportModal,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+  const isLarge = width >= 1200;
+
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'drive' | 'novel'>('all');
 
@@ -126,23 +131,31 @@ export const SearchScreen: React.FC<SearchScreenProps> = ({
               const isCurrent = currentBook?.id === item.id && isPlaying;
               if (item.type === 'web_novel') {
                 return (
-                  <NovelCard
+                  <View
                     key={item.id}
-                    novel={item}
+                    style={[
+                      styles.resultNovelWrapper,
+                      isWide && (isLarge ? styles.resultNovelWrapper3Col : styles.resultNovelWrapper2Col),
+                    ]}
+                  >
+                    <NovelCard
+                      novel={item}
+                      isPlaying={isCurrent}
+                      onPress={() => onSelectBook(item)}
+                      onPlayPress={() => onTogglePlay(item)}
+                    />
+                  </View>
+                );
+              }
+              return (
+                <View key={item.id} style={styles.resultBookWrapper}>
+                  <BookCard
+                    book={item}
                     isPlaying={isCurrent}
                     onPress={() => onSelectBook(item)}
                     onPlayPress={() => onTogglePlay(item)}
                   />
-                );
-              }
-              return (
-                <BookCard
-                  key={item.id}
-                  book={item}
-                  isPlaying={isCurrent}
-                  onPress={() => onSelectBook(item)}
-                  onPlayPress={() => onTogglePlay(item)}
-                />
+                </View>
               );
             })}
           </View>
@@ -197,7 +210,20 @@ const styles = StyleSheet.create({
   resultsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    gap: 16,
+    justifyContent: 'flex-start',
+  },
+  resultNovelWrapper: {
+    width: '100%',
+  },
+  resultNovelWrapper2Col: {
+    width: '48.8%',
+  },
+  resultNovelWrapper3Col: {
+    width: '32%',
+  },
+  resultBookWrapper: {
+    width: 165,
   },
   emptyState: {
     alignItems: 'center',

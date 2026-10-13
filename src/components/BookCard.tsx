@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
 import { Book } from '../types';
@@ -7,6 +7,7 @@ import { Book } from '../types';
 interface BookCardProps {
   book: Book;
   isPlaying: boolean;
+  isLoading?: boolean;
   onPress: () => void;
   onPlayPress: () => void;
 }
@@ -14,6 +15,7 @@ interface BookCardProps {
 export const BookCard: React.FC<BookCardProps> = ({
   book,
   isPlaying,
+  isLoading = false,
   onPress,
   onPlayPress,
 }) => {
@@ -30,15 +32,20 @@ export const BookCard: React.FC<BookCardProps> = ({
 
         {/* Play Floating Action */}
         <TouchableOpacity
-          style={[styles.playBtn, isPlaying && styles.playingBtn]}
+          style={[styles.playBtn, isPlaying && styles.playingBtn, isLoading && { opacity: 0.85 }]}
           onPress={onPlayPress}
           activeOpacity={0.8}
+          disabled={isLoading}
         >
-          <Ionicons
-            name={isPlaying ? 'pause' : 'play'}
-            size={18}
-            color={isPlaying ? Colors.primary : Colors.background}
-          />
+          {isLoading ? (
+            <ActivityIndicator size="small" color={Colors.background} />
+          ) : (
+            <Ionicons
+              name={isPlaying ? 'pause' : 'play'}
+              size={18}
+              color={isPlaying ? Colors.primary : Colors.background}
+            />
+          )}
         </TouchableOpacity>
       </View>
 

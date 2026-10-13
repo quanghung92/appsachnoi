@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../theme/colors';
@@ -20,6 +21,7 @@ interface LibraryScreenProps {
   onTogglePlay: (book: Book) => void;
   onOpenImportModal: () => void;
   onDeleteBook: (book: Book) => void;
+  onRemoveRecentBook: (book: Book) => void;
 }
 
 export const LibraryScreen: React.FC<LibraryScreenProps> = ({
@@ -31,7 +33,11 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({
   onTogglePlay,
   onOpenImportModal,
   onDeleteBook,
+  onRemoveRecentBook,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Top Banner */}
@@ -62,40 +68,57 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({
           <Text style={styles.emptyText}>Chưa có lịch sử nghe sách nào.</Text>
         </View>
       ) : (
-        <View style={styles.recentList}>
+        <View style={[styles.recentList, isWide && styles.gridList]}>
           {recentBooks.map((book) => {
             const isCurrent = currentBook?.id === book.id && isPlaying;
             return (
-              <TouchableOpacity
+              <View
                 key={book.id}
-                style={styles.recentItem}
-                onPress={() => onSelectBook(book)}
-                activeOpacity={0.85}
+                style={[styles.itemWrapper, isWide && styles.itemWrapperHalf]}
               >
-                <Image source={{ uri: book.coverUrl }} style={styles.recentCover} />
-                <View style={styles.recentInfo}>
-                  <Text style={styles.recentTitle} numberOfLines={1}>
-                    {book.title}
-                  </Text>
-                  <Text style={styles.recentAuthor}>{book.author}</Text>
-                  <Text style={styles.recentChapter} numberOfLines={1}>
-                    {book.chapters[0]?.title || 'Chương 1'}
-                  </Text>
-                </View>
                 <TouchableOpacity
-                  style={[styles.miniPlayBtn, isCurrent && styles.miniPlayingBtn]}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    onTogglePlay(book);
-                  }}
+                  style={styles.recentItem}
+                  onPress={() => onSelectBook(book)}
+                  activeOpacity={0.85}
                 >
-                  <Ionicons
-                    name={isCurrent ? 'pause' : 'play'}
-                    size={16}
-                    color={isCurrent ? Colors.primary : Colors.background}
-                  />
+                  <Image source={{ uri: book.coverUrl }} style={styles.recentCover} />
+                  <View style={styles.recentInfo}>
+                    <Text style={styles.recentTitle} numberOfLines={1}>
+                      {book.title}
+                    </Text>
+                    <Text style={styles.recentAuthor}>{book.author}</Text>
+                    <Text style={styles.recentChapter} numberOfLines={1}>
+                      {book.chapters[0]?.title || 'Chương 1'}
+                    </Text>
+                  </View>
+                  <View style={styles.recentActionGroup}>
+                    <TouchableOpacity
+                      style={[styles.miniPlayBtn, isCurrent && styles.miniPlayingBtn]}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onTogglePlay(book);
+                      }}
+                      accessibilityLabel={isCurrent ? 'Tạm dừng' : 'Phát'}
+                    >
+                      <Ionicons
+                        name={isCurrent ? 'pause' : 'play'}
+                        size={16}
+                        color={isCurrent ? Colors.primary : Colors.background}
+                      />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.recentDeleteBtn}
+                      onPress={(e) => {
+                        e.stopPropagation();
+                        onRemoveRecentBook(book);
+                      }}
+                      accessibilityLabel="Xóa khỏi lịch sử"
+                    >
+                      <Ionicons name="trash-outline" size={16} color={Colors.error} />
+                    </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
-              </TouchableOpacity>
+              </View>
             );
           })}
         </View>
@@ -117,32 +140,36 @@ export const LibraryScreen: React.FC<LibraryScreenProps> = ({
           </TouchableOpacity>
         </View>
       ) : (
-        <View style={styles.savedList}>
+        <View style={[styles.savedList, isWide && styles.gridList]}>
           {savedBooks.map((book) => (
-            <TouchableOpacity
+            <View
               key={book.id}
-              style={styles.savedItem}
-              onPress={() => onSelectBook(book)}
+              style={[styles.itemWrapper, isWide && styles.itemWrapperHalf]}
             >
-              <Image source={{ uri: book.coverUrl }} style={styles.savedCover} />
-              <View style={styles.savedInfo}>
-                <Text style={styles.savedTitle} numberOfLines={1}>
-                  {book.title}
-                </Text>
-                <Text style={styles.savedCategory}>{book.category} • {book.chapters.length} chương</Text>
-              </View>
               <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  onDeleteBook(book);
-                }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={styles.savedItem}
+                onPress={() => onSelectBook(book)}
               >
-                <Ionicons name="trash-outline" size={18} color={Colors.error} />
+                <Image source={{ uri: book.coverUrl }} style={styles.savedCover} />
+                <View style={styles.savedInfo}>
+                  <Text style={styles.savedTitle} numberOfLines={1}>
+                    {book.title}
+                  </Text>
+                  <Text style={styles.savedCategory}>{book.category} • {book.chapters.length} chương</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.deleteBtn}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    onDeleteBook(book);
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="trash-outline" size={18} color={Colors.error} />
+                </TouchableOpacity>
+                <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
               </TouchableOpacity>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
+            </View>
           ))}
         </View>
       )}
@@ -291,6 +318,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.primary,
   },
+  recentActionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recentDeleteBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   savedList: {
     paddingHorizontal: 20,
     gap: 8,
@@ -326,5 +366,16 @@ const styles = StyleSheet.create({
   deleteBtn: {
     padding: 8,
     marginRight: 2,
+  },
+  gridList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  itemWrapper: {
+    width: '100%',
+  },
+  itemWrapperHalf: {
+    width: '48.8%',
   },
 });

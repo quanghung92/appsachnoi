@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -31,6 +32,9 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
   onClose,
   onBookImported,
 }) => {
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+
   const [url, setUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -56,7 +60,7 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
       // Chưa có batch server: luồng cũ (cào trên máy / nội dung mẫu).
       const book = await crawlerService.parseUrl(trimmed);
       finishImport(book, playImmediately);
-    } catch (err) {
+    } catch {
       setIsLoading(false);
       Alert.alert('Lỗi phân tích', 'Không thể bóc tách nội dung từ đường dẫn này. Vui lòng kiểm tra lại liên kết.');
     }
@@ -138,15 +142,15 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
         onBookImported(book, true);
         onClose();
       }
-    } catch (err) {
+    } catch {
       console.log('Pick document cancelled or failed');
     }
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
-        <View style={styles.card}>
+    <Modal visible={visible} animationType={isWide ? 'fade' : 'slide'} transparent>
+      <View style={[styles.overlay, isWide && styles.overlayWide]}>
+        <View style={[styles.card, isWide && styles.cardWide]}>
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.iconCircle}>
@@ -239,6 +243,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'flex-end',
   },
+  overlayWide: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
   card: {
     backgroundColor: Colors.surface,
     borderTopLeftRadius: 24,
@@ -246,6 +255,11 @@ const styles = StyleSheet.create({
     padding: 22,
     borderWidth: 1,
     borderColor: Colors.border,
+  },
+  cardWide: {
+    maxWidth: 560,
+    width: '100%',
+    borderRadius: 24,
   },
   header: {
     flexDirection: 'row',

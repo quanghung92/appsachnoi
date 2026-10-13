@@ -61,6 +61,7 @@ export interface BatchQueueItem {
   chapter_id: string;
   title: string;
   engine: BatchEngine;
+  voice?: string;
 }
 
 export type QueuePosition = 'front' | 'back';
@@ -115,6 +116,11 @@ async function ensureAudioCacheDir(): Promise<string> {
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
   return dir;
 }
+
+export const DEFAULT_BOOK_SERVER_MAPPINGS: Record<string, string> = {
+  novel_1: 'n224d74b8a6', // Phàm Nhân Tu Tiên (459 chương audio MP3 trên Drive)
+  drive_3: 'b9e3d10582f', // Nhà Giả Kim (11 phần audio MP3 trên Drive)
+};
 
 class BatchService {
   public isConfigured(): boolean {
@@ -302,9 +308,11 @@ class BatchService {
 
   public async getServerBookId(localBookId: string): Promise<string | null> {
     try {
-      return await AsyncStorage.getItem(SERVER_BOOK_ID_PREFIX + localBookId);
+      const stored = await AsyncStorage.getItem(SERVER_BOOK_ID_PREFIX + localBookId);
+      if (stored && stored.trim().length > 0) return stored.trim();
+      return DEFAULT_BOOK_SERVER_MAPPINGS[localBookId] || null;
     } catch {
-      return null;
+      return DEFAULT_BOOK_SERVER_MAPPINGS[localBookId] || null;
     }
   }
 
@@ -416,6 +424,17 @@ class BatchService {
 
       const saveToDevice = await this.getSaveToDevice();
       if (!saveToDevice) {
+        if (Platform.OS === 'web') {
+          const fileId = entry.drive_file_id;
+          const host =
+            typeof window !== 'undefined' && window.location.hostname
+              ? window.location.hostname
+              : 'localhost';
+          if (fileId) {
+            return `http://${host}:3001/drive-stream?id=${fileId}`;
+          }
+          return `http://${host}:3001/drive-stream?url=${encodeURIComponent(entry.download_url)}`;
+        }
         return entry.download_url; // stream trực tiếp từ Drive, không lưu máy
       }
 

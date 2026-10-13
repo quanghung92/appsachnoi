@@ -115,7 +115,7 @@ const getDetectedHostIp = (): string => {
         }
       }
     }
-  } catch (e) {}
+  } catch {}
   return '192.168.110.172';
 };
 
@@ -143,12 +143,15 @@ class TTSService {
   private serverPort: number = LOCAL_SERVER_PORT;
   private serverBaseUrl: string | null = null;
   private activePlayer: AudioPlayer | null = null;
+  private webAudio: any = null;
+  private webBlobUrl: string | null = null;
   private isUsingServerAudio: boolean = false;
   // Chapter-audio mode: phát 1 file MP3 nguyên chương (từ batch server / Drive)
   // thay vì từng câu qua Kokoro. Dùng chung progress listeners của App.
   private chapterMode: boolean = false;
   private chapterOnMsProgress: ((posMs: number, durMs: number) => void) | null = null;
   private chapterLastProgressEmit: number = 0;
+  private chapterDurationMs: number = 0;
 
   // --- Sentence chunking state (PLAN B3: zero-waste dual buffer) ---
   private sentences: string[] = [];
@@ -214,6 +217,11 @@ class TTSService {
 
   public setSpeed(speed: number) {
     this.currentSpeed = speed;
+    if (this.webAudio) {
+      try {
+        this.webAudio.playbackRate = speed;
+      } catch {}
+    }
   }
 
   public getSpeed(): number {
@@ -297,7 +305,7 @@ class TTSService {
             message: `Kết nối thành công! (${data.engine || 'VieNeu-TTS'})`
           };
         }
-      } catch (e: any) {}
+      } catch {}
     }
 
     // 2. Thử lần lượt: Local IP Wi-Fi -> Nếu không được, thử Tunnel online (dành cho 4G hoặc máy tính bật VPN)
@@ -335,7 +343,7 @@ class TTSService {
             message: `Kết nối thành công! (${data.engine || 'VieNeu-TTS'})`
           };
         }
-      } catch (e: any) {}
+      } catch {}
     }
 
     return {
@@ -453,7 +461,8 @@ class TTSService {
     onFinish?: () => void,
     onError?: (error: any) => void,
     onMsProgress?: (posMs: number, durMs: number) => void,
-    startMs: number = 0
+    startMs: number = 0,
+    knownDurationMs: number = 0
   ) {
     await this.stop();
 
@@ -462,6 +471,7 @@ class TTSService {
     this.isSpeaking = true;
     this.isPaused = false;
     this.chapterMode = true;
+    this.chapterDurationMs = (knownDurationMs && knownDurationMs > 0) ? knownDurationMs : 0;
     this.chapterOnMsProgress = onMsProgress || null;
     this.chapterLastProgressEmit = 0;
     this.speakOnFinish = onFinish || null;
@@ -469,9 +479,137 @@ class TTSService {
     this.consecutiveFailures = 0;
 
     if (Platform.OS === 'web') {
-      this.cleanUp();
-      if (onError) onError(new Error('Chapter audio chưa hỗ trợ trên web'));
-      return;
+      try {
+        if (this.webAudio) {
+          try {
+            this.webAudio.pause();
+            this.webAudio.src = '';
+          } catch {}
+          this.webAudio = null;
+        }
+        if (this.webBlobUrl) {
+          try {
+            URL.revokeObjectURL(this.webBlobUrl);
+          } catch {}
+          this.webBlobUrl = null;
+        }
+
+        // Tự động chuyển link Google Drive sang proxy stream trên Web để tránh lỗi CORS/CORP
+        let playSrc = localUri;
+        if (playSrc.includes('drive.google.com') || playSrc.includes('drive.usercontent.google.com')) {
+          const host =
+            typeof window !== 'undefined' && window.location.hostname
+              ? window.location.hostname
+              : 'localhost';
+          const idMatch = playSrc.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+          if (idMatch) {
+            playSrc = `http://${host}:3001/drive-stream?id=${idMatch[1]}`;
+          } else {
+            playSrc = `http://${host}:3001/drive-stream?url=${encodeURIComponent(playSrc)}`;
+          }
+        }
+
+        console.log(`[TTS] Đang phát chapter audio trên Web: ${playSrc}`);
+        const audio = new Audio(playSrc);
+        this.webAudio = audio;
+        this.isUsingServerAudio = true;
+        this.chapterMode = true;
+
+        const getDurMs = (posMs: number = 0) => {
+          if (!isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0) {
+            this.chapterDurationMs = Math.floor(audio.duration * 1000);
+            return this.chapterDurationMs;
+          }
+          if (this.chapterDurationMs > 0) {
+            return Math.max(this.chapterDurationMs, posMs);
+          }
+          return Math.max(posMs + 1000, 60000);
+        };
+
+        const emitWebProgress = (isPlayingState: boolean) => {
+          if (myId !== this.playbackId) return;
+          const posMs = Math.floor((audio.currentTime || 0) * 1000);
+          const durMs = getDurMs(posMs);
+          this.notifyProgress(posMs, Math.max(durMs, posMs), isPlayingState);
+          const now = Date.now();
+          if (this.chapterOnMsProgress && now - this.chapterLastProgressEmit > 1500) {
+            this.chapterLastProgressEmit = now;
+            try {
+              this.chapterOnMsProgress(posMs, durMs);
+            } catch {}
+          }
+        };
+
+        audio.onplay = () => {
+          if (myId !== this.playbackId) return;
+          this.isSpeaking = true;
+          this.isPaused = false;
+          emitWebProgress(true);
+        };
+
+        audio.onplaying = () => {
+          if (myId !== this.playbackId) return;
+          this.isSpeaking = true;
+          this.isPaused = false;
+          emitWebProgress(true);
+        };
+
+        audio.onpause = () => {
+          if (myId !== this.playbackId) return;
+          this.isPaused = true;
+          emitWebProgress(false);
+        };
+
+        audio.ondurationchange = () => {
+          if (myId !== this.playbackId) return;
+          emitWebProgress(!audio.paused);
+        };
+
+        audio.onloadedmetadata = () => {
+          if (myId !== this.playbackId) return;
+          emitWebProgress(!audio.paused);
+        };
+
+        audio.oncanplay = () => {
+          if (myId !== this.playbackId) return;
+          emitWebProgress(!audio.paused);
+        };
+
+        audio.ontimeupdate = () => {
+          if (myId !== this.playbackId) return;
+          emitWebProgress(!audio.paused);
+        };
+
+        audio.onended = () => {
+          this.finishPlayback(myId);
+        };
+
+        audio.onerror = (e) => {
+          console.log('[TTS] Web chapter audio error:', e);
+          this.cleanUp();
+          this.chapterMode = false;
+          if (onError) onError(e);
+        };
+
+        if (startMs > 1000) {
+          audio.currentTime = startMs / 1000;
+        }
+
+        audio.playbackRate = this.currentSpeed;
+        await audio.play();
+        this.isSpeaking = true;
+        this.isPaused = false;
+        emitWebProgress(true);
+
+        console.log(`[TTS] Đang phát chapter audio trên Web thành công!`);
+        return;
+      } catch (webErr) {
+        console.log('[TTS] Web playChapterAudio init error:', webErr);
+        this.cleanUp();
+        this.chapterMode = false;
+        if (onError) onError(webErr);
+        return;
+      }
     }
 
     try {
@@ -488,8 +626,11 @@ class TTSService {
       player.addListener('playbackStatusUpdate', (status: any) => {
         if (myId !== this.playbackId || !this.isSpeaking) return;
         const posMs = (status.currentTime || 0) * 1000;
-        const durMs = Math.max((status.duration || 0) * 1000, 1000);
-        this.notifyProgress(posMs, durMs, status.playing);
+        const rawDur = (status.duration || 0) * 1000;
+        let durMs = !isNaN(rawDur) && isFinite(rawDur) && rawDur > 0 ? rawDur : this.chapterDurationMs;
+        if (!durMs || durMs <= 0) durMs = Math.max(posMs + 1000, 60000);
+        this.chapterDurationMs = durMs;
+        this.notifyProgress(posMs, Math.max(durMs, posMs), status.playing);
         const now = Date.now();
         if (this.chapterOnMsProgress && now - this.chapterLastProgressEmit > 2000) {
           this.chapterLastProgressEmit = now;
@@ -834,28 +975,56 @@ class TTSService {
 
   public async pause() {
     this.isPaused = true;
-    if (this.isUsingServerAudio && this.activePlayer) {
+    if (this.webAudio) {
+      try {
+        this.webAudio.pause();
+      } catch {}
+      const posMs = Math.floor((this.webAudio.currentTime || 0) * 1000);
+      const rawDur = (!isNaN(this.webAudio.duration) && isFinite(this.webAudio.duration) && this.webAudio.duration > 0)
+        ? Math.floor(this.webAudio.duration * 1000)
+        : 10000;
+      this.notifyProgress(posMs, rawDur, false);
+      return;
+    } else if (this.isUsingServerAudio && this.activePlayer) {
       try {
         this.activePlayer.pause();
-      } catch (e) {}
+      } catch {}
+      if (!this.chapterMode) {
+        this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, false);
+      }
+      return;
     } else {
       try {
         await Speech.pause();
-      } catch (e) {}
+      } catch {}
     }
     this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, false);
   }
 
   public async resume() {
     this.isPaused = false;
-    if (this.isUsingServerAudio && this.activePlayer) {
+    if (this.webAudio) {
+      try {
+        await this.webAudio.play();
+      } catch {}
+      const posMs = Math.floor((this.webAudio.currentTime || 0) * 1000);
+      const rawDur = (!isNaN(this.webAudio.duration) && isFinite(this.webAudio.duration) && this.webAudio.duration > 0)
+        ? Math.floor(this.webAudio.duration * 1000)
+        : 10000;
+      this.notifyProgress(posMs, rawDur, true);
+      return;
+    } else if (this.isUsingServerAudio && this.activePlayer) {
       try {
         this.activePlayer.play();
-      } catch (e) {}
+      } catch {}
+      if (!this.chapterMode) {
+        this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, true);
+      }
+      return;
     } else {
       try {
         await Speech.resume();
-      } catch (e) {}
+      } catch {}
     }
     this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, true);
   }
@@ -866,21 +1035,35 @@ class TTSService {
     this.chunkPrefetching = [];
     this.sentences = [];
     this.chapterMode = false;
+    this.chapterDurationMs = 0;
     this.chapterOnMsProgress = null;
     // Không xóa file cache audio nữa — giữ lại trên máy để nghe lại offline,
     // không phải gọi server synth lại (tiết kiệm credit Modal).
     this.cleanUp();
+    if (this.webAudio) {
+      try {
+        this.webAudio.pause();
+        this.webAudio.src = '';
+      } catch {}
+      this.webAudio = null;
+    }
+    if (this.webBlobUrl) {
+      try {
+        URL.revokeObjectURL(this.webBlobUrl);
+      } catch {}
+      this.webBlobUrl = null;
+    }
     if (this.activePlayer) {
       try {
         this.activePlayer.pause();
         this.activePlayer.remove();
-      } catch (e) {}
+      } catch {}
       this.activePlayer = null;
     }
     this.isUsingServerAudio = false;
     try {
       await Speech.stop();
-    } catch (e) {}
+    } catch {}
     this.notifyProgress(0, this.estimatedDurationMs || 1000, false);
   }
 
@@ -894,6 +1077,9 @@ class TTSService {
   }
 
   public isPausedState(): boolean {
+    if (this.webAudio) {
+      return Boolean(this.webAudio.paused && !this.webAudio.ended);
+    }
     return this.isPaused;
   }
 
@@ -903,13 +1089,29 @@ class TTSService {
 
   public async seekTo(ms: number) {
     // Chapter-audio mode: tua trực tiếp trên file MP3 nguyên chương
-    if (this.chapterMode && this.isUsingServerAudio && this.activePlayer) {
-      try {
-        await this.activePlayer.seekTo(Math.max(0, ms) / 1000);
-      } catch (e) {
-        console.log('[TTS] seekTo (chapter) error:', e);
+    if (this.chapterMode) {
+      if (this.webAudio) {
+        try {
+          this.webAudio.currentTime = Math.max(0, ms) / 1000;
+          const posMs = Math.floor((this.webAudio.currentTime || 0) * 1000);
+          const rawDur = (!isNaN(this.webAudio.duration) && isFinite(this.webAudio.duration) && this.webAudio.duration > 0)
+            ? Math.floor(this.webAudio.duration * 1000)
+            : (this.chapterDurationMs || Math.max(posMs + 1000, 60000));
+          this.chapterDurationMs = rawDur;
+          this.notifyProgress(posMs, Math.max(rawDur, posMs), !this.webAudio.paused);
+        } catch (e) {
+          console.log('[TTS] seekTo (web chapter) error:', e);
+        }
+        return;
       }
-      return;
+      if (this.isUsingServerAudio && this.activePlayer) {
+        try {
+          await this.activePlayer.seekTo(Math.max(0, ms) / 1000);
+        } catch (e) {
+          console.log('[TTS] seekTo (chapter) error:', e);
+        }
+        return;
+      }
     }
     if (this.isUsingServerAudio && this.sentences.length > 0) {
       // Tìm câu chứa vị trí ms (dựa trên thời lượng đã biết hoặc ước lượng)
