@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 /**
  * BatchService: nối app với batch server (Modal cron) — "nhà máy" audio.
@@ -195,6 +196,8 @@ class BatchService {
    * Mặc định: true (tải về).
    */
   public async getSaveToDevice(): Promise<boolean> {
+    // Web: luôn stream, không tải file về (FileSystem không dùng được trên web)
+    if (Platform.OS === 'web') return false;
     try {
       const v = await AsyncStorage.getItem(SAVE_TO_DEVICE_KEY);
       return v !== '0';
