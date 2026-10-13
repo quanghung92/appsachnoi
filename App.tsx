@@ -8,6 +8,7 @@ import {
   SafeAreaView,
   Platform,
   Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from './src/theme/colors';
@@ -38,6 +39,9 @@ import { LibraryScreen } from './src/screens/LibraryScreen';
 export default function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState<'home' | 'search' | 'library'>('home');
+  // Responsive: màn hình rộng (>=900px) dùng sidebar thay vì bottom nav
+  const { width } = useWindowDimensions();
+  const isWide = Platform.OS === 'web' && width >= 900;
   const [selectedCategory, setSelectedCategory] = useState<string>('Tất Cả');
 
   // Book Data
@@ -579,7 +583,47 @@ export default function App() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
 
-      <View style={styles.appContainer}>
+      <View style={[styles.appContainer, isWide && styles.appContainerWide]}>
+        {/* Sidebar cho web rộng */}
+        {isWide && (
+          <View style={styles.sidebar}>
+            <View style={styles.sidebarLogo}>
+              <Ionicons name="book" size={28} color={Colors.primary} />
+              <Text style={styles.sidebarLogoText}>AudioVerse</Text>
+            </View>
+            {(
+              [
+                { key: 'home', label: 'Khám Phá', icon: 'home', iconOutline: 'home-outline' },
+                { key: 'search', label: 'Tìm Kiếm', icon: 'search', iconOutline: 'search-outline' },
+                { key: 'library', label: 'Tủ Sách', icon: 'library', iconOutline: 'library-outline' },
+              ] as const
+            ).map((tab) => (
+              <TouchableOpacity
+                key={tab.key}
+                style={[styles.sidebarTab, activeTab === tab.key && styles.sidebarTabActive]}
+                onPress={() => setActiveTab(tab.key)}
+                accessibilityLabel={tab.label}
+              >
+                <Ionicons
+                  name={activeTab === tab.key ? tab.icon : tab.iconOutline}
+                  size={22}
+                  color={activeTab === tab.key ? Colors.primary : Colors.textMuted}
+                />
+                <Text
+                  style={[
+                    styles.sidebarLabel,
+                    activeTab === tab.key && { color: Colors.primary, fontWeight: '700' },
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* Cột nội dung chính */}
+        <View style={[styles.mainColumn, isWide && styles.mainColumnWide]}>
         {/* Top Header */}
         <Header
           currentVoice={currentVoice}
@@ -646,68 +690,71 @@ export default function App() {
           />
         )}
 
-        {/* Bottom Navigation Bar */}
-        <View style={styles.bottomNav}>
-          <TouchableOpacity
-            style={styles.navTab}
-            onPress={() => setActiveTab('home')}
-            accessibilityLabel="Khám phá"
-          >
-            <Ionicons
-              name={activeTab === 'home' ? 'home' : 'home-outline'}
-              size={22}
-              color={activeTab === 'home' ? Colors.primary : Colors.textMuted}
-            />
-            <Text
-              style={[
-                styles.navLabel,
-                activeTab === 'home' && { color: Colors.primary, fontWeight: '700' },
-              ]}
+        {/* Navigation: bottom nav trên mobile (web rộng dùng sidebar) */}
+        {!isWide && (
+          <View style={styles.bottomNav}>
+            <TouchableOpacity
+              style={styles.navTab}
+              onPress={() => setActiveTab('home')}
+              accessibilityLabel="Khám phá"
             >
-              Khám Phá
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name={activeTab === 'home' ? 'home' : 'home-outline'}
+                size={22}
+                color={activeTab === 'home' ? Colors.primary : Colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.navLabel,
+                  activeTab === 'home' && { color: Colors.primary, fontWeight: '700' },
+                ]}
+              >
+                Khám Phá
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.navTab}
-            onPress={() => setActiveTab('search')}
-            accessibilityLabel="Tìm kiếm"
-          >
-            <Ionicons
-              name={activeTab === 'search' ? 'search' : 'search-outline'}
-              size={22}
-              color={activeTab === 'search' ? Colors.primary : Colors.textMuted}
-            />
-            <Text
-              style={[
-                styles.navLabel,
-                activeTab === 'search' && { color: Colors.primary, fontWeight: '700' },
-              ]}
+            <TouchableOpacity
+              style={styles.navTab}
+              onPress={() => setActiveTab('search')}
+              accessibilityLabel="Tìm kiếm"
             >
-              Tìm Kiếm
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name={activeTab === 'search' ? 'search' : 'search-outline'}
+                size={22}
+                color={activeTab === 'search' ? Colors.primary : Colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.navLabel,
+                  activeTab === 'search' && { color: Colors.primary, fontWeight: '700' },
+                ]}
+              >
+                Tìm Kiếm
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.navTab}
-            onPress={() => setActiveTab('library')}
-            accessibilityLabel="Tủ sách"
-          >
-            <Ionicons
-              name={activeTab === 'library' ? 'library' : 'library-outline'}
-              size={22}
-              color={activeTab === 'library' ? Colors.primary : Colors.textMuted}
-            />
-            <Text
-              style={[
-                styles.navLabel,
-                activeTab === 'library' && { color: Colors.primary, fontWeight: '700' },
-              ]}
+            <TouchableOpacity
+              style={styles.navTab}
+              onPress={() => setActiveTab('library')}
+              accessibilityLabel="Tủ sách"
             >
-              Tủ Sách
-            </Text>
-          </TouchableOpacity>
-        </View>
+              <Ionicons
+                name={activeTab === 'library' ? 'library' : 'library-outline'}
+                size={22}
+                color={activeTab === 'library' ? Colors.primary : Colors.textMuted}
+              />
+              <Text
+                style={[
+                  styles.navLabel,
+                  activeTab === 'library' && { color: Colors.primary, fontWeight: '700' },
+                ]}
+              >
+                Tủ Sách
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        </View>{/* mainColumn */}
       </View>
 
       {/* Full Player Modal */}
@@ -787,6 +834,51 @@ const styles = StyleSheet.create({
   appContainer: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  appContainerWide: {
+    flexDirection: 'row',
+  },
+  mainColumn: {
+    flex: 1,
+  },
+  mainColumnWide: {
+    maxWidth: 1200,
+  },
+  sidebar: {
+    width: 220,
+    backgroundColor: Colors.surface,
+    borderRightWidth: 1,
+    borderRightColor: Colors.border,
+    paddingTop: 24,
+    paddingHorizontal: 12,
+  },
+  sidebarLogo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingBottom: 24,
+  },
+  sidebarLogoText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginLeft: 8,
+  },
+  sidebarTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 4,
+  },
+  sidebarTabActive: {
+    backgroundColor: Colors.background,
+  },
+  sidebarLabel: {
+    fontSize: 15,
+    color: Colors.textMuted,
+    marginLeft: 12,
   },
   screenContainer: {
     flex: 1,
