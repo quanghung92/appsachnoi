@@ -88,10 +88,40 @@ def normalize_audio(audio: np.ndarray, peak: float | None = DEFAULT_NORMALIZE_PE
     return audio.astype(np.float32, copy=False)
 
 
-def phonemize(text: str) -> str:
-    from vig2p import phonemize_text
+# Bảng sửa lỗi phát âm các từ tiếng Việt không dấu bị G2P đọc nhầm sang tiếng Anh
+VI_CUSTOM_WORDS: dict[str, str] = {
+    "do": "zˈɔ",      # Sửa lỗi 'do' bị đọc thành 'đu' (English /duː/)
+    "to": "tˈɔ",      # Sửa lỗi 'to' bị đọc thành 'tu' (English /tuː/)
+    "no": "nˈɔ",      # Sửa lỗi 'no' bị đọc thành 'nâu' (English /noʊ/)
+    "so": "ʂˈɔ",      # Sửa lỗi 'so' bị đọc thành 'sâu' (English /soʊ/)
+    "an": "ˈaːn",     # Sửa lỗi 'an' bị đọc thành 'en' (English /æn/)
+    "me": "mˈɛ",      # Sửa lỗi 'me' bị đọc thành 'mi' (English /miː/)
+    "he": "hˈɛ",      # Sửa lỗi 'he' bị đọc thành 'hi' (English /hiː/)
+    "go": "ɣˈɔ",      # Sửa lỗi 'go' bị đọc thành 'gâu' (English /ɡoʊ/)
+    "in": "ˈin",      # Sửa lỗi 'in' bị đọc thành /ɪn/
+    "am": "ˈaːm",     # Sửa lỗi 'am' bị đọc thành /æm/
+    "at": "ˈaːt",     # Sửa lỗi 'at' bị đọc thành /æt/
+}
 
-    return phonemize_text(text)
+
+def phonemize(text: str) -> str:
+    """Chuyển đổi văn bản tiếng Việt sang âm vị IPA, ưu tiên sửa các từ xung đột tiếng Anh."""
+    from vig2p import phonemize_text, tokenize_text
+
+    tokens = tokenize_text(text)
+    pieces: list[str] = []
+    for token in tokens:
+        if token.isspace():
+            pieces.append(token)
+            continue
+        w_lower = token.lower()
+        if w_lower in VI_CUSTOM_WORDS:
+            pieces.append(VI_CUSTOM_WORDS[w_lower])
+        else:
+            pieces.append(phonemize_text(token))
+
+    return "".join(pieces).strip()
+
 
 
 def list_voices() -> list[str]:
