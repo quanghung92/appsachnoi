@@ -17,11 +17,25 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+# Đảm bảo đường dẫn import cho audioverse_batch
+_CURR_DIR = str(Path(__file__).resolve().parent)
+if _CURR_DIR not in sys.path:
+    sys.path.insert(0, _CURR_DIR)
+
+# Tự động kiểm tra và tải các thư viện thiếu (vig2p, onnxruntime, soundfile, ...)
+try:
+    from check_and_install_deps import ensure_dependencies
+    ensure_dependencies()
+except Exception as _dep_err:
+    print(f"[Dependency Warning] Không thể auto-check dependencies: {_dep_err}")
 
 from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -54,8 +68,29 @@ QUEUE_PATH = DATA_DIR / "queue.json"
 for d in [DATA_DIR, CACHE_DIR, MODEL_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# Khởi tạo FastAPI
-app = FastAPI(title="AudioVerse Streaming API", version="6.1")
+# Quản lý vòng đời ứng dụng theo chuẩn FastAPI Lifespan mới nhất
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Khởi chạy background worker (Preemption & Backfill)
+    asyncio.create_task(background_batch_worker())
+    # 2. Tự động đồng bộ 470 file MP3 Seed Cache từ Google Drive
+    asyncio.create_task(sync_upstream_seed_index())
+    # 3. Nạp trước Kokoro model vào RAM (Warmup) để request đầu tiên không bị delay
+    def _warmup():
+        try:
+            print("[Warmup] Đang nạp trước mô hình Kokoro vào RAM...")
+            m = get_kokoro_model(DEFAULT_VOICE)
+            m.synthesize("Xin chào bạn đến với AudioVerse.", speed=1.0)
+            print("[Warmup] ✅ Mô hình Kokoro đã sẵn sàng 100% trong RAM!")
+        except Exception as e:
+            print(f"[Warmup Warning] Không thể nạp trước model: {e}")
+
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, _warmup)
+    yield
+
+# Khởi tạo FastAPI với lifespan
+app = FastAPI(title="AudioVerse Streaming API", version="6.1", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -323,7 +358,10 @@ async def synthesize_chunk_coalesced(book_id: str, chapter_id: str, chunk_idx: i
         fut.set_result(mp3_bytes)
         return mp3_bytes
     except Exception as e:
-        fut.set_exception(e)
+        if not fut.done():
+            fut.set_exception(e)
+            # Ngăn asyncio cảnh báo 'Future exception was never retrieved' khi không có listener khác
+            fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
         raise e
     finally:
         _in_flight_tasks.pop(task_key, None)
@@ -424,26 +462,6 @@ async def sync_upstream_seed_index():
             json.dump(local_data, f, ensure_ascii=False, indent=2)
 
         print(f"[Seed Cache] ✅ ĐÃ ĐỒNG BỘ THÀNH CÔNG {len(local_data)} CHƯƠNG MP3 (Đã nạp {merged_count} chương mới từ Drive)!")
-
-
-@app.on_event("startup")
-async def startup_event():
-    # 1. Khởi chạy background worker (Preemption & Backfill)
-    asyncio.create_task(background_batch_worker())
-    # 2. Tự động đồng bộ 470 file MP3 Seed Cache từ Google Drive
-    asyncio.create_task(sync_upstream_seed_index())
-    # 3. Nạp trước Kokoro model vào RAM (Warmup) để request đầu tiên không bị delay
-    def _warmup():
-        try:
-            print("[Warmup] Đang nạp trước mô hình Kokoro vào RAM...")
-            m = get_kokoro_model(DEFAULT_VOICE)
-            m.synthesize("Xin chào bạn đến với AudioVerse.", speed=1.0)
-            print("[Warmup] ✅ Mô hình Kokoro đã sẵn sàng 100% trong RAM!")
-        except Exception as e:
-            print(f"[Warmup Warning] Không thể nạp trước model: {e}")
-
-    loop = asyncio.get_running_loop()
-    loop.run_in_executor(None, _warmup)
 
 
 # ----------------------------------------------------------------
@@ -665,12 +683,16 @@ async def get_stream_chunk(sess: str = Query(..., description="Session ID"), idx
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi gen audio: {e}")
 
-    # Prefetch gối đầu N+1, N+2
+    # Prefetch gối đầu N+1, N+2 an toàn trong nền (bắt lỗi để không sinh unretrieved task exception)
+    async def _safe_prefetch(target_idx: int):
+        try:
+            await synthesize_chunk_coalesced(book_id, chapter_id, target_idx, sentences[target_idx], voice)
+        except Exception as prefetch_err:
+            print(f"[Prefetch Warning] Lỗi prefetch chunk {target_idx}: {prefetch_err}")
+
     for next_idx in [idx + 1, idx + 2]:
         if next_idx < len(sentences) and not get_cached_chunk_mp3(book_id, chapter_id, next_idx):
-            asyncio.create_task(
-                synthesize_chunk_coalesced(book_id, chapter_id, next_idx, sentences[next_idx], voice)
-            )
+            asyncio.create_task(_safe_prefetch(next_idx))
 
     return Response(content=mp3_bytes, media_type="audio/mpeg")
 
