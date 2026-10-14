@@ -18,6 +18,7 @@ from .core import (
     resolve_voicepack_filename,
     split_text,
 )
+from .normalizer import normalize_text_for_tts, number_to_words
 
 __all__ = [
     'DEFAULT_CONFIG_FILE',

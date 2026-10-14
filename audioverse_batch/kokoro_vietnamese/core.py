@@ -35,7 +35,9 @@ VOICES = {
 
 
 def split_text(text: str) -> list[str]:
-    normalized = re.sub(r'\s+', ' ', text.strip())
+    from .normalizer import normalize_text_for_tts
+    cleaned_text = normalize_text_for_tts(text)
+    normalized = re.sub(r'\s+', ' ', cleaned_text.strip())
     if not normalized:
         return []
 
