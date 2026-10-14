@@ -837,12 +837,18 @@ class TTSService {
         try {
           const dir = await this.ensureAudioCacheDir();
           const { path: cachePath, ext } = await this.cachePathFor(index);
-          // Cache hit trên máy -> dùng ngay, không gọi server
+          // Cache hit trên máy -> kiểm tra kích thước, file quá nhỏ là corrupt -> tải lại
           const hit: any = await FileSystem.getInfoAsync(cachePath).catch(() => null);
           if (hit && hit.exists) {
             if (myId !== this.playbackId) return null;
-            this.chunkUris[index] = cachePath;
-            return cachePath;
+            // File < 1KB chắc chắn không phải audio hợp lệ -> xóa, tải lại
+            if (hit.size && hit.size < 1024) {
+              console.warn(`[TTS] Câu ${index + 1} cache bị hỏng (${hit.size} bytes), tải lại...`);
+              await FileSystem.deleteAsync(cachePath, { idempotent: true }).catch(() => {});
+            } else {
+              this.chunkUris[index] = cachePath;
+              return cachePath;
+            }
           }
           // Cache miss -> tải về file tạm rồi chuyển vào cache (hỗ trợ thử lại tối đa 3 lần nếu server đang bận gen Kokoro)
           const url = this.chunkUrl(index);
@@ -870,7 +876,16 @@ class TTSService {
             return null;
           }
           if (result && result.status === 200) {
-            console.log(`[TTS] Câu ${index + 1} tải thành công!`);
+            // Kiểm tra kích thước file tải về — file rỗng/corrupt (HTTP 200 nhưng không có audio)
+            // sẽ khiến player phát 0 giây rồi nhảy cóc qua chunk tiếp theo
+            const tmpInfo: any = await FileSystem.getInfoAsync(tmpFile).catch(() => null);
+            const tmpSize = tmpInfo?.size || 0;
+            if (tmpSize < 1024) {
+              console.warn(`[TTS] Câu ${index + 1} tải về file hỏng (${tmpSize} bytes), coi như thất bại.`);
+              await FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
+              return null;
+            }
+            console.log(`[TTS] Câu ${index + 1} tải thành công! (${tmpSize} bytes)`);
             const exists: any = await FileSystem.getInfoAsync(cachePath).catch(() => null);
             if (exists && exists.exists) {
               await FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
