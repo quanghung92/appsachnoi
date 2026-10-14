@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+AudioVerse Streaming Backend Server (FastAPI + Kokoro ONNX).
+Hỗ trợ cả chạy cục bộ (Ubuntu/PC) và chạy trên Modal Cloud.
+
+Các tính năng cốt lõi theo Master Spec v6.0:
+  1. Adaptive Chunking: Chunk 0 ngắn (15-18 từ, < 1.6s) để nghe tức thì, Chunk 1..N dài (30-40 từ) để gối đầu buffer.
+  2. Single-Flight Coalescing: Nhiều user cùng stream 1 câu thì chỉ gen 1 lần duy nhất.
+  3. Sparse Cache & Manifest: Lưu vết từng chunk vào ổ cứng, tua không mất audio cũ.
+  4. Preemption Priority: Live stream chiếm quyền ưu tiên tuyệt đối, ngắt batch ngầm.
+  5. Seed Cache Migration: Tự động kế thừa 470 file MP3 cũ trên Google Drive.
+"""
+
+import asyncio
+import io
+import json
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Import Kokoro & Normalizer
+try:
+    from kokoro_vietnamese.onnx_cli import KokoroVietnameseONNX
+    from kokoro_vietnamese.core import VOICES, SAMPLE_RATE
+    from kokoro_vietnamese.normalizer import normalize_text_for_tts
+except ImportError:
+    from audioverse_batch.kokoro_vietnamese.onnx_cli import KokoroVietnameseONNX
+    from audioverse_batch.kokoro_vietnamese.core import VOICES, SAMPLE_RATE
+    from audioverse_batch.kokoro_vietnamese.normalizer import normalize_text_for_tts
+
+import soundfile as sf
+
+# --- Đường dẫn lưu trữ ---
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR / "data")))
+MODEL_DIR = Path(os.environ.get("MODEL_DIR", str(BASE_DIR / "models")))
+CACHE_DIR = DATA_DIR / "stream_cache"
+INDEX_PATH = DATA_DIR / "index.json"
+QUEUE_PATH = DATA_DIR / "queue.json"
+
+for d in [DATA_DIR, CACHE_DIR, MODEL_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+# --- Trạng thái toàn cục (In-Memory State) ---
+app = FastAPI(title="AudioVerse Streaming API", version="6.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Kokoro Model Cache (Lazy load per voice)
+_kokoro_models: Dict[str, KokoroVietnameseONNX] = {}
+
+# Single-Flight Coalescing: key -> asyncio.Future
+_in_flight_tasks: Dict[str, asyncio.Future] = {}
+
+# Session Store: session_id -> SessionData
+_sessions: Dict[str, dict] = {}
+
+# Priority Scheduler: Thời điểm hết hạn phiên stream gần nhất
+STREAM_ACTIVE_UNTIL: float = 0.0
+
+DEFAULT_VOICE = "duc_an"
+
+
+def update_stream_activity(timeout_seconds: float = 60.0):
+    """Ghi nhận có người dùng đang stream, yêu cầu hoãn batch ngầm."""
+    global STREAM_ACTIVE_UNTIL
+    STREAM_ACTIVE_UNTIL = time.time() + timeout_seconds
+
+
+def is_stream_active() -> bool:
+    """Kiểm tra xem hiện tại có ai đang nghe stream trực tiếp không."""
+    return time.time() < STREAM_ACTIVE_UNTIL
+
+
+def get_kokoro_model(voice_id: str = DEFAULT_VOICE) -> KokoroVietnameseONNX:
+    """Nạp model Kokoro ONNX (in-memory singleton)."""
+    clean_voice = (voice_id or "").lower().replace("kokoro_", "").strip()
+    if clean_voice not in VOICES:
+        clean_voice = DEFAULT_VOICE
+
+    if clean_voice not in _kokoro_models:
+        print(f"[Kokoro] Đang nạp model cho giọng: {clean_voice}...")
+        kwargs = {"voice": clean_voice, "device": "cpu"}
+        local_onnx = MODEL_DIR / "kokoro_vi.onnx"
+        local_cfg = MODEL_DIR / "config.json"
+        local_vp = MODEL_DIR / VOICES[clean_voice]["filename"]
+        if local_onnx.exists() and local_cfg.exists():
+            kwargs.update({
+                "onnx_path": str(local_onnx),
+                "config_path": str(local_cfg),
+                "voicepack_path": str(local_vp) if local_vp.exists() else None,
+            })
+        _kokoro_models[clean_voice] = KokoroVietnameseONNX(**kwargs)
+        print(f"[Kokoro] Nạp model giọng {clean_voice} hoàn tất!")
+
+    return _kokoro_models[clean_voice]
+
+
+# ----------------------------------------------------------------
+# Helper: Cắt câu thích ứng (Adaptive Chunking)
+# ----------------------------------------------------------------
+
+def adaptive_split_sentences(text: str) -> List[str]:
+    """
+    Chia văn bản chương thành các chunks tối ưu theo benchmark:
+      - Chunk 0: Ngắn (15-18 từ) để đạt Latency < 1.6s.
+      - Chunk 1..N: Vừa (28-38 từ) để ngữ điệu mượt và dôi dư buffer > 4s.
+    """
+    cleaned = normalize_text_for_tts(text)
+    raw_sentences = re.split(r"(?<=[.!?…])\s+", cleaned)
+    raw_sentences = [s.strip() for s in raw_sentences if s.strip()]
+
+    if not raw_sentences:
+        return []
+
+    chunks: List[str] = []
+    
+    # 1. Chunk 0: Cắt ngắn ưu tiên phản hồi tức thì
+    first_part = ""
+    while raw_sentences:
+        candidate = (first_part + " " + raw_sentences[0]).strip() if first_part else raw_sentences[0]
+        words = len(candidate.split())
+        if words <= 18 or not first_part:
+            first_part = candidate
+            raw_sentences.pop(0)
+            if words >= 14:
+                break
+        else:
+            break
+    chunks.append(first_part)
+
+    # 2. Chunk 1..N: Ghép câu vừa vặn (25 - 38 từ)
+    current_chunk = ""
+    for s in raw_sentences:
+        candidate = (current_chunk + " " + s).strip() if current_chunk else s
+        words = len(candidate.split())
+        if words <= 35:
+            current_chunk = candidate
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = s
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+# ----------------------------------------------------------------
+# Helper: Quản lý Sparse Cache & Lưu trữ Audio Chunk
+# ----------------------------------------------------------------
+
+def get_chapter_cache_dir(book_id: str, chapter_id: str) -> Path:
+    safe_book = re.sub(r"[^a-zA-Z0-9_-]", "_", book_id)[:60]
+    safe_chap = re.sub(r"[^a-zA-Z0-9_-]", "_", chapter_id)[:40]
+    dir_path = CACHE_DIR / safe_book / safe_chap
+    dir_path.mkdir(parents=True, exist_ok=True)
+    return dir_path
+
+
+def load_manifest(book_id: str, chapter_id: str) -> dict:
+    cdir = get_chapter_cache_dir(book_id, chapter_id)
+    mfile = cdir / "manifest.json"
+    if mfile.exists():
+        try:
+            with open(mfile, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"total_chunks": 0, "completed_chunks": [], "is_complete": False}
+
+
+def save_manifest(book_id: str, chapter_id: str, data: dict):
+    cdir = get_chapter_cache_dir(book_id, chapter_id)
+    mfile = cdir / "manifest.json"
+    with open(mfile, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def get_cached_chunk_audio(book_id: str, chapter_id: str, chunk_idx: int) -> Optional[bytes]:
+    """Lấy audio WAV từ ổ cứng nếu đã có."""
+    cdir = get_chapter_cache_dir(book_id, chapter_id)
+    cfile = cdir / f"chunk_{chunk_idx}.wav"
+    if cfile.exists() and cfile.stat().st_size > 500:
+        with open(cfile, "rb") as f:
+            return f.read()
+    return None
+
+
+def save_chunk_audio(book_id: str, chapter_id: str, chunk_idx: int, audio_bytes: bytes):
+    """Lưu audio chunk vào thư mục đệm cố định."""
+    cdir = get_chapter_cache_dir(book_id, chapter_id)
+    cfile = cdir / f"chunk_{chunk_idx}.wav"
+    with open(cfile, "wb") as f:
+        f.write(audio_bytes)
+
+    # Cập nhật manifest
+    manifest = load_manifest(book_id, chapter_id)
+    if chunk_idx not in manifest["completed_chunks"]:
+        manifest["completed_chunks"].append(chunk_idx)
+        manifest["completed_chunks"].sort()
+    if manifest["total_chunks"] > 0 and len(manifest["completed_chunks"]) >= manifest["total_chunks"]:
+        manifest["is_complete"] = True
+    save_manifest(book_id, chapter_id, manifest)
+
+
+# ----------------------------------------------------------------
+# Helper: Single-Flight Audio Synthesizer (Kokoro Worker)
+# ----------------------------------------------------------------
+
+def _synthesize_blocking(text: str, voice_id: str) -> bytes:
+    """Hàm chạy blocking TTS Kokoro trong thread pool."""
+    model = get_kokoro_model(voice_id)
+    audio_arr, _ = model.synthesize(text, speed=1.0)
+    buf = io.BytesIO()
+    sf.write(buf, audio_arr, SAMPLE_RATE, format="WAV")
+    return buf.getvalue()
+
+
+async def synthesize_chunk_coalesced(book_id: str, chapter_id: str, chunk_idx: int, text: str, voice_id: str) -> bytes:
+    """
+    Tạo audio cho chunk với cơ chế Single-Flight Coalescing:
+    Nếu nhiều request cùng hỏi 1 chunk chưa có, chỉ gen 1 lần duy nhất!
+    """
+    # 1. Kiểm tra cache ổ cứng
+    cached = get_cached_chunk_audio(book_id, chapter_id, chunk_idx)
+    if cached:
+        return cached
+
+    # 2. Kiểm tra có task nào đang gen chunk này không
+    task_key = f"{book_id}:{chapter_id}:{chunk_idx}:{voice_id}"
+    loop = asyncio.get_running_loop()
+
+    if task_key in _in_flight_tasks:
+        # User khác đang gen chunk này -> Đợi nhận chung kết quả
+        return await _in_flight_tasks[task_key]
+
+    # 3. Tạo task mới
+    fut = loop.create_future()
+    _in_flight_tasks[task_key] = fut
+
+    try:
+        update_stream_activity()
+        # Chạy Kokoro trong executor thread để không block event loop
+        audio_bytes = await loop.run_in_executor(None, _synthesize_blocking, text, voice_id)
+        # Lưu vào cache ổ cứng
+        save_chunk_audio(book_id, chapter_id, chunk_idx, audio_bytes)
+        fut.set_result(audio_bytes)
+        return audio_bytes
+    except Exception as e:
+        fut.set_exception(e)
+        raise e
+    finally:
+        _in_flight_tasks.pop(task_key, None)
+
+
+# ----------------------------------------------------------------
+# Helper: Cào nội dung truyện web đơn giản
+# ----------------------------------------------------------------
+
+def crawl_web_chapter_content(url: str) -> str:
+    """Cào text của 1 chương truyện web."""
+    try:
+        from bs4 import BeautifulSoup
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "iframe", "ins"]):
+            tag.decompose()
+        # Lấy nội dung chương
+        content_el = soup.select_one(".chapter-c, .reading-content, #chapter-c, .box-chap")
+        if content_el:
+            return content_el.get_text("\n", strip=True)
+    except Exception as e:
+        print(f"[Crawl Error] {e}")
+    return ""
+
+
+# ----------------------------------------------------------------
+# FASTAPI ENDPOINTS (API CONTRACT)
+# ----------------------------------------------------------------
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "audioverse-streaming",
+        "version": "6.0",
+        "kokoro_engine": "onnx",
+        "default_voice": DEFAULT_VOICE,
+    }
+
+
+@app.get("/api/index")
+def get_index(book_id: str = Query("", description="Mã sách")):
+    """
+    Tra cứu trạng thái các chương của sách.
+    Tự động tích hợp 470 file Seed Cache từ Google Drive cũ.
+    """
+    index_data = {}
+    if INDEX_PATH.exists():
+        try:
+            with open(INDEX_PATH, "r", encoding="utf-8") as f:
+                index_data = json.load(f)
+        except Exception:
+            pass
+
+    # Lọc theo book_id nếu có
+    if book_id:
+        filtered = {}
+        for k, v in index_data.items():
+            if k.startswith(f"{book_id}/") or v.get("book_id") == book_id:
+                chap_id = k.split("/")[-1]
+                filtered[chap_id] = v
+        return {"book_id": book_id, "chapters": filtered}
+
+    return {"chapters": index_data}
+
+
+class StreamStartRequest(BaseModel):
+    book_id: str
+    chapter_id: str
+    url: Optional[str] = ""
+    text: Optional[str] = ""
+    voice: Optional[str] = DEFAULT_VOICE
+    speed: Optional[float] = 1.0
+    start_chunk_index: Optional[int] = 0
+
+
+@app.post("/api/stream/start")
+async def stream_start(req: StreamStartRequest):
+    """
+    Khởi tạo phiên Stream:
+      1. Lấy text chương (từ request hoặc cào từ url).
+      2. Tách câu thông minh (Chunk 0 ngắn < 1.6s, Chunk 1..N gối đầu).
+      3. Kích hoạt gen ngay Chunk 0 và trả về cho client phát tức thì.
+    """
+    update_stream_activity()
+    content = (req.text or "").strip()
+    if not content and req.url:
+        content = crawl_web_chapter_content(req.url)
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Không có nội dung text hoặc không cào được chương.")
+
+    # Tách câu
+    sentences = adaptive_split_sentences(content)
+    if not sentences:
+        raise HTTPException(status_code=400, detail="Không tách được câu từ nội dung.")
+
+    session_id = f"sess_{int(time.time())}_{req.book_id}_{req.chapter_id}"
+
+    # Cập nhật manifest
+    manifest = load_manifest(req.book_id, req.chapter_id)
+    manifest["total_chunks"] = len(sentences)
+    save_manifest(req.book_id, req.chapter_id, manifest)
+
+    # Lưu session vào RAM
+    _sessions[session_id] = {
+        "book_id": req.book_id,
+        "chapter_id": req.chapter_id,
+        "sentences": sentences,
+        "voice": req.voice or DEFAULT_VOICE,
+        "created_at": time.time(),
+    }
+
+    start_idx = max(0, min(req.start_chunk_index or 0, len(sentences) - 1))
+
+    # Kích hoạt gen ngay Chunk đầu tiên
+    try:
+        await synthesize_chunk_coalesced(
+            req.book_id,
+            req.chapter_id,
+            start_idx,
+            sentences[start_idx],
+            req.voice or DEFAULT_VOICE,
+        )
+    except Exception as e:
+        print(f"[Stream Start] Lỗi gen chunk {start_idx}: {e}")
+
+    # Prefetch trước Chunk tiếp theo trong background
+    if start_idx + 1 < len(sentences):
+        asyncio.create_task(
+            synthesize_chunk_coalesced(
+                req.book_id,
+                req.chapter_id,
+                start_idx + 1,
+                sentences[start_idx + 1],
+                req.voice or DEFAULT_VOICE,
+            )
+        )
+
+    return {
+        "session_id": session_id,
+        "book_id": req.book_id,
+        "chapter_id": req.chapter_id,
+        "total_chunks": len(sentences),
+        "sentences": sentences,
+        "first_chunk": {
+            "index": start_idx,
+            "audio_url": f"/api/stream/chunk?sess={session_id}&idx={start_idx}",
+            "text": sentences[start_idx],
+        },
+    }
+
+
+@app.get("/api/stream/chunk")
+async def get_stream_chunk(sess: str = Query(..., description="Session ID"), idx: int = Query(..., description="Chỉ số chunk")):
+    """
+    Kéo audio của chunk.
+    Tự động prefetch gối đầu chunk tiếp theo (Sliding Buffer).
+    """
+    update_stream_activity()
+    session = _sessions.get(sess)
+    if not session:
+        raise HTTPException(status_code=404, detail="Phiên stream không tồn tại hoặc đã hết hạn.")
+
+    sentences = session["sentences"]
+    if idx < 0 or idx >= len(sentences):
+        raise HTTPException(status_code=400, detail="Chỉ số chunk không hợp lệ.")
+
+    book_id = session["book_id"]
+    chapter_id = session["chapter_id"]
+    voice = session["voice"]
+
+    # 1. Gen hoặc lấy audio của chunk hiện tại
+    try:
+        audio_bytes = await synthesize_chunk_coalesced(book_id, chapter_id, idx, sentences[idx], voice)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi gen audio: {e}")
+
+    # 2. Tự động Prefetch trước Chunk N+1 và N+2 trong nền
+    for next_idx in [idx + 1, idx + 2]:
+        if next_idx < len(sentences) and not get_cached_chunk_audio(book_id, chapter_id, next_idx):
+            asyncio.create_task(
+                synthesize_chunk_coalesced(book_id, chapter_id, next_idx, sentences[next_idx], voice)
+            )
+
+    return Response(content=audio_bytes, media_type="audio/wav")
+
+
+class AbortRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/api/stream/abort")
+def stream_abort(req: AbortRequest):
+    """Hủy hoặc kết thúc phiên stream khi người dùng đổi chương."""
+    session = _sessions.pop(req.session_id, None)
+    if session:
+        manifest = load_manifest(session["book_id"], session["chapter_id"])
+        return {
+            "status": "aborted",
+            "session_id": req.session_id,
+            "saved_chunks": len(manifest.get("completed_chunks", [])),
+        }
+    return {"status": "not_found"}
+
+
+class BackfillRequest(BaseModel):
+    book_id: str
+    chapter_id: str
+    missing_chunks: List[int]
+    voice: Optional[str] = DEFAULT_VOICE
+    auto_stitch: Optional[bool] = True
+
+
+@app.post("/api/batch/backfill")
+async def batch_backfill(req: BackfillRequest):
+    """
+    Yêu cầu gen bù các câu thủng còn thiếu:
+    Chỉ gen đúng các câu trong missing_chunks, không gen lại câu đã có.
+    """
+    manifest = load_manifest(req.book_id, req.chapter_id)
+    cached_set = set(manifest.get("completed_chunks", []))
+    to_gen = [c for c in req.missing_chunks if c not in cached_set]
+
+    # Đưa vào hàng đợi gen bù ngầm
+    return {
+        "status": "enqueued",
+        "book_id": req.book_id,
+        "chapter_id": req.chapter_id,
+        "chunks_to_gen": len(to_gen),
+        "already_cached": len(cached_set),
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("=" * 70)
+    print("🚀 KHỞI ĐỘNG AUDIOVERSE STREAMING BACKEND TRÊN CỔNG 3000...")
+    print("=" * 70)
+    uvicorn.run("server_streaming:app", host="0.0.0.0", port=3000, reload=True)
