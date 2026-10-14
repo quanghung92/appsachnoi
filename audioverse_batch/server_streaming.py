@@ -184,41 +184,91 @@ def get_kokoro_model(voice_id: str = DEFAULT_VOICE) -> KokoroVietnameseONNX:
 # Helper: Cắt câu thích ứng (Adaptive Chunking)
 # ----------------------------------------------------------------
 
+def _hard_split_long_text(text: str, max_words: int = 30) -> List[str]:
+    """Cắt nhỏ đoạn văn dài hơn max_words theo dấu phẩy, hai chấm, gạch ngang hoặc theo từ."""
+    words = text.split()
+    if len(words) <= max_words:
+        return [text]
+
+    # Thử tách theo dấu ngắt câu phụ: , ; : -
+    sub_clauses = re.split(r"(?<=[,;:–—])\s+", text)
+    if len(sub_clauses) > 1 and all(len(c.split()) < len(words) for c in sub_clauses):
+        res = []
+        cur = ""
+        for c in sub_clauses:
+            candidate = (cur + " " + c).strip() if cur else c
+            if len(candidate.split()) <= max_words:
+                cur = candidate
+            else:
+                if cur:
+                    res.append(cur)
+                if len(c.split()) > max_words:
+                    # Nếu 1 vế vẫn quá dài -> cắt theo từ
+                    w = c.split()
+                    for i in range(0, len(w), max_words):
+                        sub_w = " ".join(w[i:i + max_words]).strip()
+                        if sub_w:
+                            res.append(sub_w)
+                    cur = ""
+                else:
+                    cur = c
+        if cur:
+            res.append(cur)
+        return [r.strip() for r in res if r.strip()]
+
+    # Fallback: Cắt thẳng theo số lượng từ
+    chunks = []
+    for i in range(0, len(words), max_words):
+        chunk = " ".join(words[i:i + max_words]).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
 def adaptive_split_sentences(text: str) -> List[str]:
     """
-    Chia văn bản chương thành các chunks tối ưu theo benchmark:
-      - Chunk 0: Ngắn (15-18 từ) để đạt Latency < 1.6s.
-      - Chunk 1..N: Vừa (28-38 từ) để ngữ điệu mượt và dôi dư buffer > 3s.
+    Chia văn bản chương thành các chunks an toàn tuyệt đối cho Kokoro TTS:
+      - Chunk 0: Ngắn (12-16 từ) để đạt Latency < 1.6s.
+      - Chunk 1..N: Vừa vặn (20-30 từ), tuyệt đối không bao giờ vượt quá 32 từ.
+      - Loại bỏ hoàn toàn lỗi Phoneme sequence too long (> 512).
     """
     cleaned = normalize_text_for_tts(text)
-    raw_sentences = re.split(r"(?<=[.!?…])\s+", cleaned)
-    raw_sentences = [s.strip() for s in raw_sentences if s.strip()]
+    # Tách trước theo dấu chấm câu chính hoặc ngắt dòng
+    base_parts = re.split(r"(?<=[.!?…\n])\s+", cleaned)
+    raw_sentences: List[str] = []
+    for part in base_parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Bẻ gãy ngay bất kỳ câu nào quá 30 từ
+        raw_sentences.extend(_hard_split_long_text(part, max_words=30))
 
     if not raw_sentences:
         return []
 
     chunks: List[str] = []
-    
-    # 1. Chunk 0: Cắt ngắn ưu tiên phản hồi tức thì
+
+    # 1. Chunk 0: Cắt ngắn ưu tiên phản hồi tức thì (< 16 từ)
     first_part = ""
     while raw_sentences:
         candidate = (first_part + " " + raw_sentences[0]).strip() if first_part else raw_sentences[0]
         words = len(candidate.split())
-        if words <= 18 or not first_part:
+        if words <= 16 or not first_part:
             first_part = candidate
             raw_sentences.pop(0)
-            if words >= 14:
+            if words >= 12:
                 break
         else:
             break
-    chunks.append(first_part)
+    if first_part:
+        chunks.append(first_part)
 
-    # 2. Chunk 1..N: Ghép câu vừa vặn (25 - 38 từ)
+    # 2. Chunk 1..N: Ghép câu vừa vặn (20 - 30 từ)
     current_chunk = ""
     for s in raw_sentences:
         candidate = (current_chunk + " " + s).strip() if current_chunk else s
         words = len(candidate.split())
-        if words <= 35:
+        if words <= 30:
             current_chunk = candidate
         else:
             if current_chunk:
@@ -229,6 +279,7 @@ def adaptive_split_sentences(text: str) -> List[str]:
         chunks.append(current_chunk)
 
     return chunks
+
 
 
 # ----------------------------------------------------------------

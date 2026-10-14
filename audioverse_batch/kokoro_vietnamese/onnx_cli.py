@@ -65,10 +65,27 @@ class KokoroVietnameseONNX:
         audio_chunks: list[np.ndarray] = []
         phoneme_chunks: list[str] = []
         speed_value = speed_input(speed)
-        for index, text_chunk in enumerate(split_text(text), start=1):
+        # Tách nhỏ bất kỳ đoạn nào dài hơn 30 từ trước khi phonemize để tránh lỗi 512 phonemes
+        raw_text_chunks = split_text(text)
+        final_text_chunks: list[str] = []
+        for tc in raw_text_chunks:
+            words = tc.split()
+            if len(words) > 30:
+                for i in range(0, len(words), 25):
+                    sub = " ".join(words[i:i + 25]).strip()
+                    if sub:
+                        final_text_chunks.append(sub)
+            else:
+                final_text_chunks.append(tc)
+
+        for index, text_chunk in enumerate(final_text_chunks, start=1):
             ps = phonemize(text_chunk)
             if not ps:
                 continue
+            # Đảm bảo an toàn tuyệt đối không vượt quá context_length (512)
+            max_ps = self.context_length - 2
+            if len(ps) > max_ps:
+                ps = ps[:max_ps]
             phoneme_chunks.append(f'[{index}] {ps}')
             input_ids = phonemes_to_input_ids(
                 ps,

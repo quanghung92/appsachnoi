@@ -15,6 +15,13 @@ import sys
 import subprocess
 import importlib
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Danh mục thư viện bắt buộc và phiên bản tương thích
 REQUIRED_PACKAGES = {
     "fastapi": "fastapi>=0.109.0",
