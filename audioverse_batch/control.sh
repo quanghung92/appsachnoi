@@ -7,7 +7,6 @@ BATCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PY="/home/hungnq/audioverse-venv/bin/python"
 WORKER="/home/hungnq/only_me/local_batch.py"
 STREAM_LOG="$BATCH_DIR/server.log"
-
 # --- Hàm kiểm tra ---
 is_stream_running() { pgrep -f "server_streaming.py" > /dev/null; }
 is_tunnel_running() { pgrep -f "cloudflared tunnel" > /dev/null; }
@@ -26,7 +25,7 @@ show_status() {
 start_stream() {
     if is_stream_running; then echo "Server đang chạy rồi."; return; fi
     cd "$BATCH_DIR" || exit 1
-    nohup python3 server_streaming.py > "$STREAM_LOG" 2>&1 &
+    nohup "$VENV_PY" server_streaming.py > "$STREAM_LOG" 2>&1 &
     sleep 2
     is_stream_running && echo "✓ Streaming server đã chạy (log: server.log)" || echo "✗ Lỗi! Xem server.log"
 }
