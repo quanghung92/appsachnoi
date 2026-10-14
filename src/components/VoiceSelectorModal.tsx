@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   Modal,
+  TextInput,
   TouchableOpacity,
   ActivityIndicator,
   Switch,
@@ -34,12 +35,36 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
   const [cacheSize, setCacheSize] = useState<number | null>(null);
   const [clearingCache, setClearingCache] = useState(false);
   const [saveToDevice, setSaveToDevice] = useState(true);
+  const [serverUrl, setServerUrl] = useState<string>(() => ttsService.getServerUrl());
+  const [testingConnection, setTestingConnection] = useState<boolean>(false);
+  const [connectionStatus, setConnectionStatus] = useState<{ success?: boolean; message?: string } | null>(null);
 
   const handleToggleSaveToDevice = async (value: boolean) => {
     setSaveToDevice(value);
     try {
       await batchService.setSaveToDevice(value);
     } catch {}
+  };
+
+  const handleSaveAndTest = async () => {
+    const trimmed = serverUrl.trim();
+    if (!trimmed) {
+      ttsService.switchToLocal();
+      setServerUrl(ttsService.getServerUrl());
+      setConnectionStatus({ success: true, message: 'Đã chuyển về mặc định máy cục bộ.' });
+      return;
+    }
+    setTestingConnection(true);
+    setConnectionStatus(null);
+    ttsService.setServerUrl(trimmed);
+    try {
+      const res = await ttsService.testServerConnection();
+      setConnectionStatus({ success: res.success, message: res.message });
+    } catch {
+      setConnectionStatus({ success: false, message: 'Không thể kết nối tới máy chủ.' });
+    } finally {
+      setTestingConnection(false);
+    }
   };
 
   const loadCacheSize = async () => {
@@ -106,6 +131,7 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
         if (!isMounted) return;
         setCacheSize(size);
         setSaveToDevice(save);
+        setServerUrl(ttsService.getServerUrl());
       });
     }
     return () => {
@@ -134,6 +160,61 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
           </View>
 
           <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
+            {/* Server Connection Card: Cloudflare Tunnel / Local IP */}
+            <View style={styles.serverCard}>
+              <View style={styles.serverCardHeader}>
+                <Ionicons name="radio" size={18} color={Colors.primary} />
+                <Text style={styles.serverCardTitle}>Máy Chủ Live Stream (Cloudflare Tunnel)</Text>
+              </View>
+              <Text style={styles.serverCardDesc}>
+                Dán link Cloudflare Tunnel (https://xxx.trycloudflare.com) hoặc IP máy chạy server_streaming.py:
+              </Text>
+              <View style={styles.serverInputRow}>
+                <TextInput
+                  style={styles.serverInput}
+                  placeholder="https://...trycloudflare.com"
+                  placeholderTextColor={Colors.textMuted}
+                  value={serverUrl}
+                  onChangeText={setServerUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={[styles.testBtn, testingConnection && styles.testBtnDisabled]}
+                  onPress={handleSaveAndTest}
+                  disabled={testingConnection}
+                >
+                  {testingConnection ? (
+                    <ActivityIndicator size="small" color={Colors.background} />
+                  ) : (
+                    <Text style={styles.testBtnText}>Lưu & Thử</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+              {connectionStatus && (
+                <View
+                  style={[
+                    styles.statusBadge,
+                    connectionStatus.success ? styles.statusBadgeSuccess : styles.statusBadgeError,
+                  ]}
+                >
+                  <Ionicons
+                    name={connectionStatus.success ? 'checkmark-circle' : 'alert-circle'}
+                    size={15}
+                    color={connectionStatus.success ? Colors.primary : '#ef4444'}
+                  />
+                  <Text
+                    style={[
+                      styles.statusBadgeText,
+                      connectionStatus.success ? styles.statusBadgeTextSuccess : styles.statusBadgeTextError,
+                    ]}
+                  >
+                    {connectionStatus.message}
+                  </Text>
+                </View>
+              )}
+            </View>
+
             {/* Setting: Lưu audio về máy */}
             <View style={styles.settingCard}>
               <View style={styles.settingTopRow}>
@@ -294,7 +375,89 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.06)',
   },
   body: {
-    maxHeight: 460,
+    maxHeight: 500,
+  },
+  serverCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 214, 160, 0.3)',
+    marginBottom: 14,
+  },
+  serverCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  serverCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  serverCardDesc: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  serverInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  serverInput: {
+    flex: 1,
+    height: 42,
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    color: Colors.textPrimary,
+  },
+  testBtn: {
+    height: 42,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testBtnDisabled: {
+    opacity: 0.6,
+  },
+  testBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.background,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  statusBadgeSuccess: {
+    backgroundColor: 'rgba(6, 214, 160, 0.12)',
+  },
+  statusBadgeError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+  },
+  statusBadgeText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  statusBadgeTextSuccess: {
+    color: Colors.primary,
+  },
+  statusBadgeTextError: {
+    color: '#ef4444',
   },
   settingCard: {
     backgroundColor: Colors.surface,
