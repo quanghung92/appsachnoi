@@ -6,8 +6,12 @@ import {
   Modal,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
+  KeyboardAvoidingView,
+  ScrollView,
   ActivityIndicator,
   Alert,
+  Platform,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -47,8 +51,6 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
 
     setIsLoading(true);
     try {
-      // Kiến trúc batch: server tự tải PDF / cào truyện, tách chương, lưu text.
-      // App chỉ nhận metadata chương; audio do server gen ban đêm -> Drive.
       if (batchService.isConfigured() && (isDriveLink(trimmed) || isNovelLink(trimmed))) {
         const book = await importViaBatch(trimmed);
         if (!book) {
@@ -57,7 +59,6 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
         finishImport(book, playImmediately);
         return;
       }
-      // Chưa có batch server: luồng cũ (cào trên máy / nội dung mẫu).
       const book = await crawlerService.parseUrl(trimmed);
       finishImport(book, playImmediately);
     } catch {
@@ -73,12 +74,6 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
     onClose();
   };
 
-  /**
-   * Nhập sách/truyện qua batch server:
-   *  - Link Drive (PDF) -> /import_book: server tải PDF, extract, tách chương.
-   *  - Link truyện web -> /import_novel: server cào thử lấy tên truyện;
-   *    app tự sinh URL các chương theo pattern (server cào lúc batch).
-   */
   const importViaBatch = async (link: string): Promise<Book | null> => {
     if (isDriveLink(link)) {
       const result = await batchService.importBook(link);
@@ -87,7 +82,7 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
         id: c.id,
         chapterNumber: i + 1,
         title: c.title,
-        content: '', // text nằm trên server, audio lấy từ Drive
+        content: '',
       }));
       return {
         id: result.book_id,
@@ -101,12 +96,11 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
         chapters,
       };
     }
-    // Truyện web
     const result = await batchService.importNovel(link);
     if (!result) return null;
     const cleanSource = link.replace(/\/+$/, '');
     const chapters: Chapter[] = [];
-    const TOTAL = 1500; // số chương tối đa hiển thị; vượt quá báo khi cào lỗi
+    const TOTAL = 1500;
     for (let n = 1; n <= TOTAL; n++) {
       chapters.push({
         id: `${result.book_id}_c${n}`,
@@ -148,118 +142,152 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType={isWide ? 'fade' : 'slide'} transparent>
-      <View style={[styles.overlay, isWide && styles.overlayWide]}>
-        <View style={[styles.card, isWide && styles.cardWide]}>
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <View style={styles.iconCircle}>
-                <Ionicons name="link" size={20} color={Colors.primary} />
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <View style={styles.overlay}>
+          {/* Chạm vào vùng nền ngoài để đóng popup */}
+          <TouchableWithoutFeedback onPress={onClose}>
+            <View style={styles.backdrop} />
+          </TouchableWithoutFeedback>
+
+          <View style={[styles.card, isWide && styles.cardWide]}>
+            <View style={styles.header}>
+              <View style={styles.headerLeft}>
+                <View style={styles.iconCircle}>
+                  <Ionicons name="link" size={20} color={Colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title} numberOfLines={1}>Thêm Sách & Truyện Mới</Text>
+                  <Text style={styles.subtitle} numberOfLines={1}>Đọc trực tiếp từ link hoặc tệp cá nhân</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.title}>Thêm Sách & Truyện Mới</Text>
-                <Text style={styles.subtitle}>Đọc trực tiếp từ link hoặc tệp cá nhân</Text>
-              </View>
+              <TouchableOpacity
+                onPress={onClose}
+                style={styles.closeBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityLabel="Đóng popup"
+              >
+                <Ionicons name="close" size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={Colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
 
-          {/* Quick Preset Buttons */}
-          <View style={styles.presetsRow}>
-            <TouchableOpacity
-              style={styles.presetChip}
-              onPress={() => setUrl('https://drive.google.com/open?id=1mlIagmYc0_B7E38xHcmyEYLSZj-qlLGM')}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
             >
-              <Ionicons name="logo-google" size={14} color={Colors.primary} />
-              <Text style={styles.presetChipText}>Google Drive</Text>
-            </TouchableOpacity>
+              {/* Quick Preset Buttons */}
+              <View style={styles.presetsRow}>
+                <TouchableOpacity
+                  style={styles.presetChip}
+                  onPress={() => setUrl('https://drive.google.com/open?id=1mlIagmYc0_B7E38xHcmyEYLSZj-qlLGM')}
+                >
+                  <Ionicons name="logo-google" size={14} color={Colors.primary} />
+                  <Text style={styles.presetChipText}>Google Drive</Text>
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.presetChip}
-              onPress={() => setUrl('https://truyenfull.vn/pham-nhan-tu-tien/chuong-1/')}
-            >
-              <Ionicons name="book-outline" size={14} color={Colors.secondary} />
-              <Text style={styles.presetChipText}>Truyện Chữ Web</Text>
-            </TouchableOpacity>
-          </View>
+                <TouchableOpacity
+                  style={styles.presetChip}
+                  onPress={() => setUrl('https://truyenfull.vn/pham-nhan-tu-tien/chuong-1/')}
+                >
+                  <Ionicons name="book-outline" size={14} color={Colors.secondary} />
+                  <Text style={styles.presetChipText}>Truyện Chữ Web</Text>
+                </TouchableOpacity>
+              </View>
 
-          {/* URL Input Box */}
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="Dán liên kết Google Drive, Web Truyện hoặc Blog..."
-              placeholderTextColor={Colors.textMuted}
-              value={url}
-              onChangeText={setUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-              multiline
-            />
-          </View>
+              {/* URL Input Box */}
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Dán liên kết Google Drive, Web Truyện hoặc Blog..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={url}
+                  onChangeText={setUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                  numberOfLines={3}
+                />
+              </View>
 
-          {/* Local File Picker Alternative */}
-          <TouchableOpacity style={styles.filePickerBtn} onPress={handlePickDocument}>
-            <Ionicons name="document-attach-outline" size={20} color={Colors.secondary} />
-            <Text style={styles.filePickerText}>Hoặc chọn tệp PDF / EPUB / TXT từ điện thoại</Text>
-          </TouchableOpacity>
+              {/* Local File Picker Alternative */}
+              <TouchableOpacity style={styles.filePickerBtn} onPress={handlePickDocument}>
+                <Ionicons name="document-attach-outline" size={19} color={Colors.secondary} />
+                <Text style={styles.filePickerText}>Hoặc chọn tệp PDF / EPUB / TXT từ điện thoại</Text>
+              </TouchableOpacity>
 
-          {/* Action Buttons */}
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={[styles.btn, styles.saveBtn]}
-              onPress={() => handleImportUrl(false)}
-              disabled={isLoading}
-            >
-              <Ionicons name="bookmark-outline" size={18} color={Colors.textLight} />
-              <Text style={styles.saveBtnText}>Lưu vào tủ sách</Text>
-            </TouchableOpacity>
+              {/* Action Buttons */}
+              <View style={styles.actions}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.saveBtn]}
+                  onPress={() => handleImportUrl(false)}
+                  disabled={isLoading}
+                >
+                  <Ionicons name="bookmark-outline" size={18} color={Colors.textLight} />
+                  <Text style={styles.saveBtnText}>Lưu vào tủ sách</Text>
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.btn, styles.playBtn]}
-              onPress={() => handleImportUrl(true)}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color={Colors.background} size="small" />
-              ) : (
-                <>
-                  <Ionicons name="play" size={18} color={Colors.background} />
-                  <Text style={styles.playBtnText}>Nghe trực tiếp</Text>
-                </>
-              )}
-            </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.playBtn]}
+                  onPress={() => handleImportUrl(true)}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color={Colors.background} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="play" size={18} color={Colors.background} />
+                      <Text style={styles.playBtnText}>Nghe trực tiếp</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  keyboardAvoid: {
+    flex: 1,
+  },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
-  },
-  overlayWide: {
+    backgroundColor: 'rgba(5, 7, 15, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: 20,
+  },
+  backdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   card: {
+    width: '100%',
+    maxWidth: 480,
     backgroundColor: Colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 22,
+    borderRadius: 24,
+    padding: 20,
     borderWidth: 1,
     borderColor: Colors.border,
+    maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.45,
+    shadowRadius: 24,
+    elevation: 16,
   },
   cardWide: {
-    maxWidth: 560,
-    width: '100%',
-    borderRadius: 24,
+    maxWidth: 540,
   },
   header: {
     flexDirection: 'row',
@@ -270,12 +298,14 @@ const styles = StyleSheet.create({
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
     gap: 12,
   },
   iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: 'rgba(6, 214, 160, 0.12)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -291,7 +321,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   closeBtn: {
-    padding: 4,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   presetsRow: {
     flexDirection: 'row',
@@ -304,7 +339,7 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: Colors.surfaceElevated,
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -320,14 +355,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 12,
-    minHeight: 80,
     marginBottom: 12,
   },
   input: {
     color: Colors.textPrimary,
     fontSize: 13,
-    lineHeight: 18,
-    height: '100%',
+    lineHeight: 19,
+    minHeight: 68,
+    maxHeight: 110,
+    textAlignVertical: 'top',
   },
   filePickerBtn: {
     flexDirection: 'row',
@@ -336,11 +372,11 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: 'rgba(139, 92, 246, 0.08)',
     borderRadius: 14,
-    paddingVertical: 12,
+    paddingVertical: 11,
     borderWidth: 1,
     borderColor: 'rgba(139, 92, 246, 0.25)',
     borderStyle: 'dashed',
-    marginBottom: 18,
+    marginBottom: 16,
   },
   filePickerText: {
     color: Colors.textLight,
@@ -350,11 +386,12 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     gap: 10,
+    marginTop: 4,
   },
   btn: {
     flex: 1,
-    height: 48,
-    borderRadius: 16,
+    height: 46,
+    borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
