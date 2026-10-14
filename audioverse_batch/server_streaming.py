@@ -469,7 +469,7 @@ async def sync_upstream_seed_index():
 # ----------------------------------------------------------------
 
 def crawl_web_chapter_content(url: str) -> str:
-    """Cào text của 1 chương truyện web."""
+    """Cào toàn văn nội dung của 1 chương truyện web bằng BeautifulSoup."""
     try:
         from bs4 import BeautifulSoup
         req = urllib.request.Request(
@@ -481,14 +481,35 @@ def crawl_web_chapter_content(url: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
         soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "iframe", "ins"]):
+        for tag in soup(["script", "style", "iframe", "ins", "noscript"]):
             tag.decompose()
-        content_el = soup.select_one(".chapter-c, .reading-content, #chapter-c, .box-chap")
+        for ad in soup.select(".ads, .ad-container, .adsbygoogle, .banner, .box-ads"):
+            ad.decompose()
+        content_el = soup.select_one(".chapter-c, .reading-content, #chapter-c, .box-chap, .chapter-content, #chapter-content, .entry-content, div[itemprop='articleBody']")
         if content_el:
             return content_el.get_text("\n", strip=True)
     except Exception as e:
         print(f"[Crawl Error] {e}")
     return ""
+
+
+@app.get("/api/crawl")
+def api_crawl(url: str = Query(..., description="URL chương truyện web")):
+    """Endpoint API cào toàn văn chương truyện web cho App Client."""
+    content = crawl_web_chapter_content(url)
+    if not content:
+        raise HTTPException(status_code=400, detail="Không thể cào nội dung từ URL này")
+    return {
+        "status": "ok",
+        "url": url,
+        "content": content,
+        "content_length": len(content),
+        "story_title": "Truyện Web",
+        "chapter_title": "Chương mới",
+        "chapter_number": 1,
+        "author": "Tác giả Online",
+    }
+
 
 
 # ----------------------------------------------------------------

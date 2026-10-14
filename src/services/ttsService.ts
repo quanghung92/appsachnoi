@@ -843,11 +843,27 @@ class TTSService {
             this.chunkUris[index] = cachePath;
             return cachePath;
           }
-          // Cache miss -> tải về file tạm rồi chuyển vào cache
+          // Cache miss -> tải về file tạm rồi chuyển vào cache (hỗ trợ thử lại tối đa 3 lần nếu server đang bận gen Kokoro)
           const url = this.chunkUrl(index);
           const tmpFile = `${dir}tmp_${myId}_${index}.${ext}`;
-          console.log(`[TTS] Đang tải câu ${index + 1}/${this.sentences.length}: ${url.substring(0, 85)}...`);
-          const result = await FileSystem.downloadAsync(url, tmpFile);
+          let result: any = null;
+
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            if (myId !== this.playbackId) return null;
+            try {
+              console.log(`[TTS] Đang tải câu ${index + 1}/${this.sentences.length}${attempt > 1 ? ` (thử lại lần ${attempt})` : ''}: ${url.substring(0, 85)}...`);
+              result = await FileSystem.downloadAsync(url, tmpFile);
+              if (result && result.status === 200) {
+                break;
+              }
+            } catch (dlErr) {
+              console.warn(`[TTS] Câu ${index + 1} tải lần ${attempt} gặp lỗi:`, dlErr);
+            }
+            if (attempt < 3 && myId === this.playbackId) {
+              await new Promise(r => setTimeout(r, 1200));
+            }
+          }
+
           if (myId !== this.playbackId) {
             FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
             return null;
@@ -865,7 +881,7 @@ class TTSService {
             this.enforceAudioCacheLimit().catch(() => {});
             return cachePath;
           }
-          console.warn(`[TTS] Câu ${index + 1} tải thất bại, HTTP status: ${result?.status}`);
+          console.warn(`[TTS] Câu ${index + 1} tải thất bại sau 3 lần thử, HTTP status: ${result?.status}`);
           await FileSystem.deleteAsync(tmpFile, { idempotent: true }).catch(() => {});
           return null;
         } catch (err) {
@@ -1076,6 +1092,9 @@ class TTSService {
       this.activePlayer = player;
       this.isUsingServerAudio = true;
 
+      // Cờ chặn duplicate event status.didJustFinish (nguyên nhân gây nhảy cóc/bỏ câu/tua về cuối)
+      let hasHandledFinish = false;
+
       player.addListener('playbackStatusUpdate', (status: any) => {
         if (myId !== this.playbackId || !this.isSpeaking) return;
         const posMs = (status.currentTime || 0) * 1000;
@@ -1083,7 +1102,8 @@ class TTSService {
         if (durMs > 0) this.chunkDurationsMs[index] = durMs;
         this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), status.playing);
 
-        if (status.didJustFinish) {
+        if (status.didJustFinish && !hasHandledFinish) {
+          hasHandledFinish = true;
           // Khi slot hiện tại kết thúc -> đổi activeSlot sang slot đối diện ngay tức thì
           this.activeSlot = nextSlot;
           const preloadedNext = nextSlot === 'A' ? this.playerSlotA : this.playerSlotB;

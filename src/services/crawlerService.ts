@@ -52,12 +52,18 @@ export class CrawlerService {
       if (!res.ok) return null;
       const html = await res.text();
       let content = '';
-      const match = html.match(/(?:id|class)=["'](?:chapter-c|chapter-content|reading-content|box-chap)["'][^>]*>([\s\S]*?)<\/div>/i);
-      if (match) {
-        content = match[1]
+      const startMatch = html.match(/(?:id|class)=["'](?:chapter-c|chapter-content|reading-content|box-chap)["'][^>]*>/i);
+      if (startMatch && startMatch.index !== undefined) {
+        const startIndex = startMatch.index + startMatch[0].length;
+        const remaining = html.substring(startIndex);
+        // Dừng lại trước phần điều hướng / footer / bình luận
+        const endMatch = remaining.match(/<(?:div|section)[^>]*(?:class|id)=["'](?:chapter-nav|truyen-nav|box-nav|footer|comment)["']/i);
+        const rawContent = endMatch && endMatch.index !== undefined ? remaining.substring(0, endMatch.index) : remaining;
+        content = rawContent
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
           .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<p[^>]*>/gi, '')
-          .replace(/<\/p>/gi, '\n')
+          .replace(/<\/?p[^>]*>/gi, '\n')
           .replace(/<[^>]+>/g, '')
           .replace(/&nbsp;/g, ' ')
           .replace(/&amp;/g, '&')
