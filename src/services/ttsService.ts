@@ -13,68 +13,12 @@ const MAX_AUDIO_CACHE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export const VIETNAMESE_VOICES: VoiceOption[] = [
   {
-    id: 'vieneu_truc_ly',
-    name: 'Trúc Ly (VieNeu AI)',
-    gender: 'female',
+    id: 'duc_an',
+    name: 'Đức An (Kokoro AI)',
+    gender: 'male',
     locale: 'vi-VN',
-    description: 'Giọng nữ Bắc trong trẻo, mượt mà, cảm xúc tự nhiên (Đỉnh cao đọc tiểu thuyết & truyện dài)',
+    description: 'Giọng nam truyền cảm, phong cách kể chuyện kiếm hiệp & tiểu thuyết, tốc độ siêu tốc (< 1.6s)',
     sampleText: 'Đêm đã về khuya, gió rít qua khe cửa sổ. Tiếng bước chân khe khẽ vang lên trên hành lang vắng lặng.'
-  },
-  {
-    id: 'vieneu_thien_minh',
-    name: 'Thiện Minh (VieNeu AI)',
-    gender: 'male',
-    locale: 'vi-VN',
-    description: 'Giọng nam Bắc trầm ấm, hào hùng, phong cách kể chuyện cuốn hút',
-    sampleText: 'Ba mươi năm Hà Đông, ba mươi năm Hà Tây, đừng khinh thiếu niên nghèo!'
-  },
-  {
-    id: 'vieneu_hai_dang',
-    name: 'Hải Đăng (VieNeu AI)',
-    gender: 'male',
-    locale: 'vi-VN',
-    description: 'Giọng nam Bắc thanh niên hiện đại, dõng dạc, tự nhiên',
-    sampleText: 'Chào bạn, chúc bạn có những phút giây nghe sách thật thư thái và hiệu quả.'
-  },
-  {
-    id: 'vieneu_mai_anh',
-    name: 'Mai Anh (VieNeu AI)',
-    gender: 'female',
-    locale: 'vi-VN',
-    description: 'Giọng nữ Bắc đĩnh đạc, phát âm chuẩn (Phù hợp sách kỹ năng & tin tức)',
-    sampleText: 'Chào bạn, hôm nay chúng ta cùng tìm hiểu những bài học quý giá từ cuốn sách này.'
-  },
-  {
-    id: 'vieneu_thuy_dung',
-    name: 'Thùy Dung (VieNeu AI)',
-    gender: 'female',
-    locale: 'vi-VN',
-    description: 'Giọng nữ Nam Bộ ngọt ngào, dịu dàng, êm tai khi nghe lâu',
-    sampleText: 'Chào bạn, chúc bạn một ngày thật bình an và nghe được nhiều điều bổ ích nghen.'
-  },
-  {
-    id: 'vieneu_thai_son',
-    name: 'Thái Sơn (VieNeu AI)',
-    gender: 'male',
-    locale: 'vi-VN',
-    description: 'Giọng nam Nam Bộ ấm áp, mộc mạc, đậm chất kể chuyện phương Nam',
-    sampleText: 'Gió chiều thổi mát rượi qua rặng dừa, con đường làng quanh co đưa ta về miền ký ức tuổi thơ.'
-  },
-  {
-    id: 'vieneu_ngoc_tran',
-    name: 'Ngọc Trân (VieNeu AI)',
-    gender: 'female',
-    locale: 'vi-VN',
-    description: 'Giọng nữ miền Trung đằm thắm, truyền cảm, sâu lắng',
-    sampleText: 'Dòng sông Hương lững lờ trôi dưới ánh trăng, mang theo bao nỗi niềm của người con xứ Huế.'
-  },
-  {
-    id: 'vieneu_quang_son',
-    name: 'Quang Sơn (VieNeu AI)',
-    gender: 'male',
-    locale: 'vi-VN',
-    description: 'Giọng nam miền Trung hào sảng, chân chất, phong cách tự nhiên',
-    sampleText: 'Nắng miền Trung chói chang trên những cồn cát trắng, nhưng lòng người vẫn mặn mòi tình quê.'
   },
   {
     id: 'vi-VN-HoaiMyNeural',
@@ -101,6 +45,7 @@ type ProgressListener = (progress: {
 }) => void;
 
 type SentenceListener = (index: number, total: number) => void;
+type SentencesLoadedListener = (sentences: string[]) => void;
 
 const getDetectedHostIp = (): string => {
   try {
@@ -129,6 +74,14 @@ export const LOCAL_SERVER_IP = '192.168.110.172';
 export const LOCAL_SERVER_PORT = 3000;
 export const LOCAL_SERVER_URL = `http://${LOCAL_SERVER_IP}:${LOCAL_SERVER_PORT}`;
 export const DEFAULT_TUNNEL_URL = 'https://nasty-wings-unite.loca.lt';
+
+// Presets nhạc nền thư giãn (nhẹ nhàng, lặp mượt mà)
+export const DEFAULT_BGM_URL = 'https://actions.google.com/sounds/v1/ambiences/rain_heavy.ogg';
+export const BGM_TRACKS = [
+  { id: 'zen_piano', name: 'Thiền định & Piano', url: 'https://actions.google.com/sounds/v1/ambiences/rain_heavy.ogg' },
+  { id: 'soft_stream', name: 'Suối chảy róc rách', url: 'https://actions.google.com/sounds/v1/water/stream_water.ogg' },
+  { id: 'night_crickets', name: 'Đêm hè yên tĩnh', url: 'https://actions.google.com/sounds/v1/ambiences/crickets_night.ogg' },
+];
 
 class TTSService {
   private currentVoice: VoiceOption = VIETNAMESE_VOICES[0];
@@ -162,8 +115,30 @@ class TTSService {
   private playbackId: number = 0;
   private consecutiveFailures: number = 0;
   private onSentenceChange: SentenceListener | null = null;
+  private onSentencesLoadedCallbacks: SentencesLoadedListener[] = [];
   private speakOnFinish: (() => void) | null = null;
   private speakOnError: ((e: any) => void) | null = null;
+
+  // --- BƯỚC 3: Ping-Pong Dual Player State (A/B Gapless 0ms) ---
+  private playerSlotA: AudioPlayer | null = null;
+  private playerSlotB: AudioPlayer | null = null;
+  private webAudioSlotA: any = null;
+  private webAudioSlotB: any = null;
+  private activeSlot: 'A' | 'B' = 'A';
+  private preloadedIndex: number = -1;
+
+  // --- BƯỚC 3: Kênh Nhạc Nền (BGM Loop Player & Audio Ducking) ---
+  private bgmPlayer: AudioPlayer | null = null;
+  private webBgmAudio: any = null;
+  private bgmEnabled: boolean = false;
+  private bgmVolume: number = 0.35; // Âm lượng cơ bản 35%
+  private voiceVolume: number = 1.0;
+  private bgmTrackUrl: string = DEFAULT_BGM_URL;
+  private isDucked: boolean = false;
+
+  // --- BƯỚC 3: Live Streaming Session State ---
+  private currentSessionId: string | null = null;
+  private isLiveStreamingMode: boolean = false;
 
   constructor() {
     this.initAudioMode();
@@ -400,6 +375,152 @@ class TTSService {
 
   public getTotalSentences(): number {
     return this.sentences.length;
+  }
+
+  public getSentences(): string[] {
+    return this.sentences;
+  }
+
+  public addOnSentencesLoadedListener(callback: SentencesLoadedListener) {
+    this.onSentencesLoadedCallbacks.push(callback);
+    if (this.sentences.length > 0) {
+      try {
+        callback(this.sentences);
+      } catch {}
+    }
+    return () => {
+      this.onSentencesLoadedCallbacks = this.onSentencesLoadedCallbacks.filter(cb => cb !== callback);
+    };
+  }
+
+  private notifySentencesLoaded(sentences: string[]) {
+    this.onSentencesLoadedCallbacks.forEach(cb => {
+      try {
+        cb(sentences);
+      } catch {}
+    });
+  }
+
+  // --- BƯỚC 3: Kênh Nhạc Nền (BGM Controls & Audio Ducking) ---
+
+  public isBgmEnabled(): boolean {
+    return this.bgmEnabled;
+  }
+
+  public setBgmEnabled(enabled: boolean) {
+    this.bgmEnabled = enabled;
+    if (enabled) {
+      this.startBgm();
+    } else {
+      this.stopBgm();
+    }
+  }
+
+  public getBgmVolume(): number {
+    return this.bgmVolume;
+  }
+
+  public setBgmVolume(volume: number) {
+    this.bgmVolume = Math.max(0, Math.min(1, volume));
+    this.applyBgmVolume();
+  }
+
+  public getVoiceVolume(): number {
+    return this.voiceVolume;
+  }
+
+  public setVoiceVolume(volume: number) {
+    this.voiceVolume = Math.max(0, Math.min(1, volume));
+  }
+
+  public getBgmTrack(): string {
+    return this.bgmTrackUrl;
+  }
+
+  public setBgmTrack(url: string) {
+    this.bgmTrackUrl = url;
+    if (this.bgmEnabled) {
+      this.startBgm();
+    }
+  }
+
+  /**
+   * Audio Ducking: Khi giọng đọc bắt đầu phát -> hạ volume BGM còn 12-15%.
+   * Khi nghỉ giữa các câu hoặc dừng -> nâng lại 100% volume BGM đã chọn.
+   */
+  private duckBgm(duck: boolean) {
+    this.isDucked = duck;
+    this.applyBgmVolume();
+  }
+
+  private applyBgmVolume() {
+    if (!this.bgmEnabled) return;
+    const targetVol = this.isDucked ? this.bgmVolume * 0.15 : this.bgmVolume;
+    if (this.webBgmAudio) {
+      try {
+        this.webBgmAudio.volume = targetVol;
+      } catch {}
+    }
+    // Mobile player volume (nếu platform hỗ trợ)
+    if (this.bgmPlayer && (this.bgmPlayer as any).setVolumeAsync) {
+      try {
+        (this.bgmPlayer as any).setVolumeAsync(targetVol);
+      } catch {}
+    }
+  }
+
+  public async startBgm() {
+    if (!this.bgmEnabled || !this.bgmTrackUrl) return;
+    try {
+      if (Platform.OS === 'web') {
+        if (this.webBgmAudio) {
+          try {
+            this.webBgmAudio.pause();
+          } catch {}
+          this.webBgmAudio = null;
+        }
+        const audio = new Audio(this.bgmTrackUrl);
+        audio.loop = true;
+        const targetVol = this.isDucked ? this.bgmVolume * 0.15 : this.bgmVolume;
+        audio.volume = targetVol;
+        audio.play().catch(e => console.log('[TTS BGM] Web auto-play deferred:', e));
+        this.webBgmAudio = audio;
+      } else {
+        if (this.bgmPlayer) {
+          try {
+            this.bgmPlayer.remove();
+          } catch {}
+          this.bgmPlayer = null;
+        }
+        this.bgmPlayer = createAudioPlayer(this.bgmTrackUrl, { updateInterval: 1000 });
+        if (this.bgmPlayer) {
+          if ((this.bgmPlayer as any).setLoopingAsync) {
+            await (this.bgmPlayer as any).setLoopingAsync(true);
+          }
+          this.applyBgmVolume();
+          this.bgmPlayer.play();
+        }
+      }
+    } catch (e) {
+      console.log('[TTS BGM] startBgm error:', e);
+    }
+  }
+
+  public stopBgm() {
+    if (this.webBgmAudio) {
+      try {
+        this.webBgmAudio.pause();
+        this.webBgmAudio.src = '';
+      } catch {}
+      this.webBgmAudio = null;
+    }
+    if (this.bgmPlayer) {
+      try {
+        this.bgmPlayer.pause();
+        this.bgmPlayer.remove();
+      } catch {}
+      this.bgmPlayer = null;
+    }
   }
 
   public async speak(
@@ -664,9 +785,12 @@ class TTSService {
   }
 
   private chunkUrl(index: number): string {
-    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_')) ? 'wav' : 'mp3';
-    const text = this.sentences[index];
     const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+    if (this.isLiveStreamingMode && this.currentSessionId) {
+      return `${base}/api/stream/chunk?sess=${encodeURIComponent(this.currentSessionId)}&idx=${index}`;
+    }
+    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_') || this.currentVoice.id === 'duc_an') ? 'wav' : 'mp3';
+    const text = this.sentences[index] || '';
     return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
   }
 
@@ -681,11 +805,16 @@ class TTSService {
   }
 
   /**
-   * Key cache ổn định theo nội dung câu + giọng + tốc độ.
+   * Key cache ổn định theo nội dung câu + giọng + tốc độ hoặc session stream.
    * Đổi giọng/tốc độ -> cache miss đúng, không phát nhầm file cũ.
    */
   private async cachePathFor(index: number): Promise<{ path: string; ext: string }> {
-    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_')) ? 'wav' : 'mp3';
+    if (this.isLiveStreamingMode && this.currentSessionId) {
+      const key = `stream_${this.currentSessionId}_${index}`;
+      const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
+      return { path: `${this.audioCacheDir()}${hash}.mp3`, ext: 'mp3' };
+    }
+    const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_') || this.currentVoice.id === 'duc_an') ? 'wav' : 'mp3';
     const key = `${this.sentences[index]}|${this.currentVoice.id}|${this.currentSpeed}`;
     const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
     return { path: `${this.audioCacheDir()}${hash}.${ext}`, ext };
@@ -818,6 +947,11 @@ class TTSService {
     }
   }
 
+  /**
+   * BƯỚC 3: Ping-Pong Dual Player Engine (A/B Gapless 0ms).
+   * Trong lúc Slot A đang đọc câu hiện tại, Slot B đã nạp sẵn câu tiếp theo.
+   * Khi Slot A kết thúc, Slot B được kích hoạt ngay trong 0ms!
+   */
   private async playChunk(index: number, myId: number) {
     if (myId !== this.playbackId) return;
     if (index >= this.sentences.length) {
@@ -832,6 +966,71 @@ class TTSService {
       } catch {}
     }
 
+    // Hạ âm lượng nhạc nền khi bắt đầu đọc (Audio Ducking 15%)
+    this.duckBgm(true);
+
+    // Kênh Web: Sử dụng Ping-Pong qua 2 thẻ Audio A và B
+    if (Platform.OS === 'web') {
+      await this.playChunkWebPingPong(index, myId);
+      return;
+    }
+
+    // Kênh Native (iOS / Android): Sử dụng Dual AudioPlayer A/B
+    await this.playChunkNativePingPong(index, myId);
+  }
+
+  private async playChunkWebPingPong(index: number, myId: number) {
+    const url = this.chunkUrl(index);
+    try {
+      const currentSlot = this.activeSlot;
+      const nextSlot = currentSlot === 'A' ? 'B' : 'A';
+
+      let audio = currentSlot === 'A' ? this.webAudioSlotA : this.webAudioSlotB;
+      if (!audio) {
+        audio = new Audio(url);
+        if (currentSlot === 'A') this.webAudioSlotA = audio;
+        else this.webAudioSlotB = audio;
+      } else {
+        audio.src = url;
+      }
+      this.webAudio = audio;
+      this.isUsingServerAudio = true;
+
+      audio.onended = () => {
+        if (myId !== this.playbackId) return;
+        this.activeSlot = nextSlot;
+        this.playChunk(index + 1, myId);
+      };
+
+      audio.ontimeupdate = () => {
+        if (myId !== this.playbackId || !this.isSpeaking) return;
+        const posMs = Math.floor((audio.currentTime || 0) * 1000);
+        const durMs = !isNaN(audio.duration) && isFinite(audio.duration) && audio.duration > 0
+          ? Math.floor(audio.duration * 1000)
+          : 0;
+        if (durMs > 0) this.chunkDurationsMs[index] = durMs;
+        this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), !audio.paused);
+      };
+
+      audio.playbackRate = this.currentSpeed;
+      await audio.play();
+
+      // Nạp trước câu tiếp theo vào slot đối diện (Slot B / Slot A)
+      const nextIdx = index + 1;
+      if (nextIdx < this.sentences.length) {
+        const nextUrl = this.chunkUrl(nextIdx);
+        const preAudio = new Audio(nextUrl);
+        preAudio.preload = 'auto';
+        if (nextSlot === 'A') this.webAudioSlotA = preAudio;
+        else this.webAudioSlotB = preAudio;
+      }
+    } catch (err) {
+      console.log('[TTS Web Ping-Pong] error:', err);
+      this.playChunk(index + 1, myId);
+    }
+  }
+
+  private async playChunkNativePingPong(index: number, myId: number) {
     const uri = await this.fetchChunk(index, myId);
     if (myId !== this.playbackId) return;
 
@@ -844,33 +1043,31 @@ class TTSService {
         if (this.speakOnError) this.speakOnError(new Error('Server TTS không phản hồi'));
         return;
       }
-      // Bỏ qua câu lỗi, sang câu tiếp theo
       this.playChunk(index + 1, myId);
       return;
     }
     this.consecutiveFailures = 0;
 
-    // Duy trì buffer luôn có sẵn 2 câu tiếp theo
+    // Buffer trước câu N+2
     this.prefetchAhead(index, myId);
 
     try {
       if (setAudioModeAsync) {
         await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true });
       }
-      // Dọn player cũ
-      if (this.activePlayer) {
-        try {
-          this.activePlayer.remove();
-        } catch {}
-        this.activePlayer = null;
+
+      const currentSlot = this.activeSlot;
+      const nextSlot = currentSlot === 'A' ? 'B' : 'A';
+
+      // Lấy player đã được preloaded hoặc tạo mới
+      let player = currentSlot === 'A' ? this.playerSlotA : this.playerSlotB;
+      if (!player) {
+        player = createAudioPlayer(uri, { updateInterval: 250 });
+        if (currentSlot === 'A') this.playerSlotA = player;
+        else this.playerSlotB = player;
       }
-      this.activePlayer = createAudioPlayer(uri, { updateInterval: 250 });
-      if (!this.activePlayer) {
-        this.playChunk(index + 1, myId);
-        return;
-      }
+      this.activePlayer = player;
       this.isUsingServerAudio = true;
-      const player = this.activePlayer;
 
       player.addListener('playbackStatusUpdate', (status: any) => {
         if (myId !== this.playbackId || !this.isSpeaking) return;
@@ -878,21 +1075,44 @@ class TTSService {
         const durMs = (status.duration || 0) * 1000;
         if (durMs > 0) this.chunkDurationsMs[index] = durMs;
         this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), status.playing);
+
         if (status.didJustFinish) {
-          // Giữ file audio trong cache trên máy để nghe lại offline / không tốn server.
-          // (Trước đây xóa ngay sau khi đọc xong — nay giữ lại, LRU tự dọn khi vượt 2GB.)
-          this.chunkUris[index] = null;
+          // Khi slot hiện tại kết thúc -> đổi activeSlot sang slot đối diện ngay tức thì
+          this.activeSlot = nextSlot;
+          const preloadedNext = nextSlot === 'A' ? this.playerSlotA : this.playerSlotB;
+          if (preloadedNext) {
+            // Gapless 0ms: Kích hoạt play ngay lập tức!
+            try {
+              preloadedNext.play();
+            } catch {}
+          }
+          // Dọn slot cũ
           try {
             player.remove();
           } catch {}
-          if (this.activePlayer === player) this.activePlayer = null;
+          if (currentSlot === 'A') this.playerSlotA = null;
+          else this.playerSlotB = null;
+
           this.playChunk(index + 1, myId);
         }
       });
 
       player.play();
+
+      // Nạp trước câu N+1 vào nextSlot (Slot B hoặc A)
+      const nextIdx = index + 1;
+      if (nextIdx < this.sentences.length) {
+        this.fetchChunk(nextIdx, myId).then(nextUri => {
+          if (myId !== this.playbackId || !nextUri) return;
+          try {
+            const prePlayer = createAudioPlayer(nextUri, { updateInterval: 250 });
+            if (nextSlot === 'A') this.playerSlotA = prePlayer;
+            else this.playerSlotB = prePlayer;
+          } catch {}
+        }).catch(() => {});
+      }
     } catch (err) {
-      console.log('[TTS] playChunk error:', err);
+      console.log('[TTS Ping-Pong Native] playChunk error:', err);
       this.playChunk(index + 1, myId);
     }
   }
@@ -975,6 +1195,8 @@ class TTSService {
 
   public async pause() {
     this.isPaused = true;
+    this.duckBgm(false);
+
     if (this.webAudio) {
       try {
         this.webAudio.pause();
@@ -1003,6 +1225,8 @@ class TTSService {
 
   public async resume() {
     this.isPaused = false;
+    this.duckBgm(true);
+
     if (this.webAudio) {
       try {
         await this.webAudio.play();
@@ -1033,13 +1257,20 @@ class TTSService {
     this.playbackId += 1; // vô hiệu hóa mọi chunk đang tải/phát dở
     this.chunkUris = [];
     this.chunkPrefetching = [];
-    this.sentences = [];
     this.chapterMode = false;
     this.chapterDurationMs = 0;
     this.chapterOnMsProgress = null;
-    // Không xóa file cache audio nữa — giữ lại trên máy để nghe lại offline,
-    // không phải gọi server synth lại (tiết kiệm credit Modal).
+    this.duckBgm(false);
+
+    if (this.currentSessionId) {
+      this.abortCurrentStream(this.currentSessionId).catch(() => {});
+      this.currentSessionId = null;
+    }
+    this.isLiveStreamingMode = false;
+
     this.cleanUp();
+
+    // Dọn dẹp Web players
     if (this.webAudio) {
       try {
         this.webAudio.pause();
@@ -1047,12 +1278,28 @@ class TTSService {
       } catch {}
       this.webAudio = null;
     }
+    if (this.webAudioSlotA) {
+      try {
+        this.webAudioSlotA.pause();
+        this.webAudioSlotA.src = '';
+      } catch {}
+      this.webAudioSlotA = null;
+    }
+    if (this.webAudioSlotB) {
+      try {
+        this.webAudioSlotB.pause();
+        this.webAudioSlotB.src = '';
+      } catch {}
+      this.webAudioSlotB = null;
+    }
     if (this.webBlobUrl) {
       try {
         URL.revokeObjectURL(this.webBlobUrl);
       } catch {}
       this.webBlobUrl = null;
     }
+
+    // Dọn dẹp Native players (A & B)
     if (this.activePlayer) {
       try {
         this.activePlayer.pause();
@@ -1060,6 +1307,21 @@ class TTSService {
       } catch {}
       this.activePlayer = null;
     }
+    if (this.playerSlotA) {
+      try {
+        this.playerSlotA.pause();
+        this.playerSlotA.remove();
+      } catch {}
+      this.playerSlotA = null;
+    }
+    if (this.playerSlotB) {
+      try {
+        this.playerSlotB.pause();
+        this.playerSlotB.remove();
+      } catch {}
+      this.playerSlotB = null;
+    }
+
     this.isUsingServerAudio = false;
     try {
       await Speech.stop();
@@ -1085,6 +1347,46 @@ class TTSService {
 
   public setNowPlaying(title: string, subtitle?: string) {
     // Can be used for lock screen / notification media controls
+  }
+
+  /**
+   * BƯỚC 3: Tua trực tiếp đến câu bất kỳ (Tap-to-Seek Read-Along)
+   */
+  public async seekToSentence(index: number) {
+    if (index < 0 || index >= this.sentences.length) return;
+    const myId = ++this.playbackId;
+    this.sentenceIndex = index;
+
+    // Dọn các slot đang chạy
+    if (this.activePlayer) {
+      try {
+        this.activePlayer.pause();
+        this.activePlayer.remove();
+      } catch {}
+      this.activePlayer = null;
+    }
+    if (this.playerSlotA) {
+      try {
+        this.playerSlotA.pause();
+        this.playerSlotA.remove();
+      } catch {}
+      this.playerSlotA = null;
+    }
+    if (this.playerSlotB) {
+      try {
+        this.playerSlotB.pause();
+        this.playerSlotB.remove();
+      } catch {}
+      this.playerSlotB = null;
+    }
+    if (this.webAudio) {
+      try {
+        this.webAudio.pause();
+      } catch {}
+    }
+
+    this.activeSlot = 'A';
+    this.playChunk(index, myId);
   }
 
   public async seekTo(ms: number) {
@@ -1127,16 +1429,7 @@ class TTSService {
         targetIndex = i;
       }
       if (targetIndex !== this.sentenceIndex) {
-        // Nhảy sang câu khác: phát lại từ câu đó
-        const myId = this.playbackId;
-        if (this.activePlayer) {
-          try {
-            this.activePlayer.pause();
-            this.activePlayer.remove();
-          } catch {}
-          this.activePlayer = null;
-        }
-        this.playChunk(targetIndex, myId);
+        await this.seekToSentence(targetIndex);
         return;
       }
       if (this.activePlayer) {
@@ -1150,6 +1443,120 @@ class TTSService {
     }
     this.elapsedMs = ms;
     this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, this.isSpeaking && !this.isPaused);
+  }
+
+  /**
+   * BƯỚC 3: Khởi tạo phiên Live Stream Kokoro trực tiếp (/api/stream/start)
+   * Nhận manifest danh sách câu và phát ngay câu đầu tiên với latency < 1.6s!
+   */
+  public async streamChapter(params: {
+    bookId: string;
+    chapterId: string;
+    text: string;
+    url?: string;
+    voice?: string;
+    speed?: number;
+    startSentenceIndex?: number;
+    onFinish?: () => void;
+    onError?: (err: any) => void;
+    onSentence?: SentenceListener;
+    onSentencesLoaded?: SentencesLoadedListener;
+  }): Promise<boolean> {
+    await this.stop();
+
+    if (!params.text || params.text.trim().length === 0) return false;
+
+    this.playbackId += 1;
+    const myId = this.playbackId;
+    this.isSpeaking = true;
+    this.isPaused = false;
+    this.speakOnFinish = params.onFinish || null;
+    this.speakOnError = params.onError || null;
+    this.onSentenceChange = params.onSentence || null;
+    this.consecutiveFailures = 0;
+
+    const startIdx = Math.max(0, params.startSentenceIndex || 0);
+    const voiceId = params.voice || this.currentVoice.id || 'duc_an';
+    const speed = params.speed || this.currentSpeed || 1.0;
+
+    const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+    console.log(`[TTS Stream] Khởi tạo phiên Live Stream tại ${base}/api/stream/start...`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const res = await fetch(`${base}/api/stream/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          book_id: params.bookId,
+          chapter_id: params.chapterId,
+          text: params.text,
+          url: params.url || '',
+          voice: voiceId,
+          speed: speed,
+          start_chunk_index: startIdx,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[TTS Stream] Phiên tạo thành công! Session: ${data.session_id}, ${data.total_chunks} chunks.`);
+        this.currentSessionId = data.session_id;
+        this.isLiveStreamingMode = true;
+
+        if (Array.isArray(data.sentences) && data.sentences.length > 0) {
+          this.sentences = data.sentences;
+        } else {
+          this.sentences = this.splitSentences(params.text);
+        }
+
+        if (params.onSentencesLoaded) params.onSentencesLoaded(this.sentences);
+        this.notifySentencesLoaded(this.sentences);
+
+        this.sentenceIndex = startIdx;
+        this.chunkUris = new Array(this.sentences.length).fill(null);
+        this.chunkDurationsMs = new Array(this.sentences.length).fill(null);
+        this.chunkPrefetching = new Array(this.sentences.length).fill(null);
+
+        this.activeSlot = 'A';
+        this.playChunk(startIdx, myId);
+        return true;
+      }
+    } catch (streamErr) {
+      console.warn('[TTS Stream] /api/stream/start không phản hồi, fallback về chế độ đọc từng câu:', streamErr);
+    }
+
+    // Fallback: Chạy chế độ speak câu đơn thông thường nếu server streaming chưa bật
+    this.isLiveStreamingMode = false;
+    this.speak(
+      params.text,
+      params.onFinish,
+      params.onError,
+      params.onSentence,
+      startIdx
+    );
+    return false;
+  }
+
+  /**
+   * BƯỚC 3: Hủy phiên stream khi người dùng thoát hoặc chuyển chương
+   */
+  public async abortCurrentStream(sessionId?: string): Promise<void> {
+    const sid = sessionId || this.currentSessionId;
+    if (!sid) return;
+    try {
+      const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+      await fetch(`${base}/api/stream/abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid }),
+      });
+      console.log(`[TTS Stream] Đã gửi abort cho session ${sid}`);
+    } catch {}
   }
 
   public getIsSpeaking(): boolean {

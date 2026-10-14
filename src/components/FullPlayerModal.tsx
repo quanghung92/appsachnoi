@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,7 @@ import {
   Modal,
   TouchableOpacity,
   Image,
-  ScrollView,
+  FlatList,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,16 +24,23 @@ interface FullPlayerModalProps {
   speed: number;
   currentVoice: VoiceOption;
   sleepTimerMinutes: number | null;
+  sentences?: string[];
+  currentSentenceIndex?: number;
   onClose: () => void;
   onPlayPause: () => void;
   onNextChapter: () => void;
   onPrevChapter: () => void;
   onSeek: (value: number) => void;
+  onSeekToSentence?: (index: number) => void;
   onChangeSpeed: () => void;
   onOpenVoiceSelector: () => void;
   onOpenChapterList: () => void;
   onOpenSleepTimer: () => void;
   onOpenBatchQueue: () => void;
+  bgmVolume?: number;
+  onChangeBgmVolume?: (val: number) => void;
+  bgmEnabled?: boolean;
+  onToggleBgm?: () => void;
 }
 
 export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
@@ -46,22 +53,62 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
   speed,
   currentVoice,
   sleepTimerMinutes,
+  sentences = [],
+  currentSentenceIndex = 0,
   onClose,
   onPlayPause,
   onNextChapter,
   onPrevChapter,
   onSeek,
+  onSeekToSentence,
   onChangeSpeed,
   onOpenVoiceSelector,
   onOpenChapterList,
   onOpenSleepTimer,
   onOpenBatchQueue,
+  bgmVolume = 0.35,
+  onChangeBgmVolume,
+  bgmEnabled = false,
+  onToggleBgm,
 }) => {
   const { width, height } = useWindowDimensions();
   const isWide = width >= 768;
   const artworkSize = Math.min(width * 0.68, height * 0.35, 270);
 
   const [showTextReader, setShowTextReader] = useState<boolean>(false);
+  const [showBgmControls, setShowBgmControls] = useState<boolean>(false);
+
+  const flatListRef = useRef<FlatList<any>>(null);
+  const userScrollingRef = useRef<boolean>(false);
+  const scrollTimeoutRef = useRef<any>(null);
+
+  // Danh sách câu: lấy từ server/ttsService nếu có, hoặc tự tách từ chapter.content
+  const sentencesList = useMemo(() => {
+    if (sentences && sentences.length > 0) return sentences;
+    if (!chapter?.content) return [];
+    const normalized = chapter.content.replace(/\s+/g, ' ').trim();
+    if (!normalized) return [];
+    const raw = normalized.match(/[^.!?…\n]+[.!?…\n]+|[^.!?…\n]+$/g) || [normalized];
+    return raw.map(s => s.trim()).filter(Boolean);
+  }, [sentences, chapter]);
+
+  // Auto-scroll thông minh tới câu đang đọc (giữ câu ở 1/3 tầm mắt)
+  useEffect(() => {
+    if (
+      showTextReader &&
+      !userScrollingRef.current &&
+      currentSentenceIndex >= 0 &&
+      currentSentenceIndex < sentencesList.length
+    ) {
+      try {
+        flatListRef.current?.scrollToIndex({
+          index: currentSentenceIndex,
+          viewPosition: 0.3,
+          animated: true,
+        });
+      } catch {}
+    }
+  }, [currentSentenceIndex, showTextReader, sentencesList.length]);
 
   if (!book || !chapter) return null;
 
@@ -70,6 +117,12 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
     const mins = Math.floor(totalSecs / 60);
     const secs = totalSecs % 60;
     return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  const handleSentencePress = (index: number) => {
+    if (onSeekToSentence) {
+      onSeekToSentence(index);
+    }
   };
 
   return (
@@ -89,29 +142,135 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
               </Text>
             </View>
 
-            <TouchableOpacity
-              onPress={() => setShowTextReader(!showTextReader)}
-              style={[styles.iconBtn, showTextReader && styles.activeReaderBtn]}
-              accessibilityLabel="Đọc văn bản"
-            >
-              <Ionicons
-                name={showTextReader ? 'document-text' : 'document-text-outline'}
-                size={24}
-                color={showTextReader ? Colors.primary : Colors.textPrimary}
-              />
-            </TouchableOpacity>
+            <View style={styles.topRightActions}>
+              {/* Nút bật/tắt Nhạc Nền (BGM) */}
+              <TouchableOpacity
+                onPress={() => setShowBgmControls(!showBgmControls)}
+                style={[styles.iconBtn, bgmEnabled && styles.activeBgmBtn, { marginRight: 8 }]}
+                accessibilityLabel="Điều chỉnh nhạc nền"
+              >
+                <Ionicons
+                  name="musical-notes"
+                  size={20}
+                  color={bgmEnabled ? Colors.primary : Colors.textMuted}
+                />
+              </TouchableOpacity>
+
+              {/* Nút chuyển chế độ Đọc Chữ (Read-Along) */}
+              <TouchableOpacity
+                onPress={() => setShowTextReader(!showTextReader)}
+                style={[styles.iconBtn, showTextReader && styles.activeReaderBtn]}
+                accessibilityLabel="Đọc văn bản"
+              >
+                <Ionicons
+                  name={showTextReader ? 'document-text' : 'document-text-outline'}
+                  size={22}
+                  color={showTextReader ? Colors.primary : Colors.textPrimary}
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
+          {/* Hộp điều khiển Nhạc Nền (BGM Controls Panel) */}
+          {showBgmControls && (
+            <View style={styles.bgmPanel}>
+              <View style={styles.bgmRow}>
+                <TouchableOpacity
+                  style={[styles.bgmToggleBtn, bgmEnabled && styles.bgmToggleBtnActive]}
+                  onPress={onToggleBgm}
+                >
+                  <Ionicons
+                    name={bgmEnabled ? 'volume-high' : 'volume-mute'}
+                    size={18}
+                    color={bgmEnabled ? Colors.background : Colors.textMuted}
+                  />
+                  <Text style={[styles.bgmToggleText, bgmEnabled && styles.bgmToggleTextActive]}>
+                    {bgmEnabled ? 'Nhạc Nền Đang Bật' : 'Nhạc Nền Đang Tắt'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.bgmDuckingBadge}>Né giọng 15%</Text>
+              </View>
+
+              {bgmEnabled && onChangeBgmVolume && (
+                <View style={styles.bgmSliderRow}>
+                  <Ionicons name="musical-note" size={16} color={Colors.textMuted} />
+                  <Slider
+                    style={styles.bgmSlider}
+                    minimumValue={0}
+                    maximumValue={1}
+                    value={bgmVolume}
+                    onValueChange={onChangeBgmVolume}
+                    minimumTrackTintColor={Colors.primary}
+                    maximumTrackTintColor={Colors.playerSliderTrack}
+                    thumbTintColor={Colors.primary}
+                  />
+                  <Text style={styles.bgmVolumeText}>{Math.round(bgmVolume * 100)}%</Text>
+                </View>
+              )}
+            </View>
+          )}
+
           {showTextReader ? (
-            /* Text Reading Mode */
+            /* BƯỚC 3: Synchronized Read-Along Mode (Highlight & Auto-Scroll & Tap-to-Seek) */
             <View style={styles.readerContainer}>
               <View style={styles.readerHeader}>
-                <Text style={styles.readerTitle}>{chapter.title}</Text>
-                <Text style={styles.readerSubtitle}>{book.title}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.readerTitle} numberOfLines={1}>{chapter.title}</Text>
+                  <Text style={styles.readerSubtitle} numberOfLines={1}>{book.title}</Text>
+                </View>
+                {sentencesList.length > 0 && (
+                  <View style={styles.sentenceCounterBadge}>
+                    <Text style={styles.sentenceCounterText}>
+                      Câu {Math.min(currentSentenceIndex + 1, sentencesList.length)}/{sentencesList.length}
+                    </Text>
+                  </View>
+                )}
               </View>
-              <ScrollView style={styles.readerScroll} showsVerticalScrollIndicator={false}>
-                <Text style={styles.readerContent}>{chapter.content}</Text>
-              </ScrollView>
+
+              <FlatList
+                ref={flatListRef}
+                data={sentencesList}
+                keyExtractor={(_, index) => `sentence_${index}`}
+                showsVerticalScrollIndicator={true}
+                contentContainerStyle={styles.readerListContent}
+                onScrollBeginDrag={() => {
+                  userScrollingRef.current = true;
+                  if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+                  scrollTimeoutRef.current = setTimeout(() => {
+                    userScrollingRef.current = false;
+                  }, 4500);
+                }}
+                renderItem={({ item, index }) => {
+                  const isCurrent = index === currentSentenceIndex;
+                  const isPast = index < currentSentenceIndex;
+
+                  return (
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={() => handleSentencePress(index)}
+                      style={[
+                        styles.sentenceItem,
+                        isCurrent && styles.activeSentenceItem,
+                      ]}
+                    >
+                      {isCurrent && (
+                        <View style={styles.activeSpeakerDot}>
+                          <Ionicons name="volume-medium" size={15} color={Colors.primary} />
+                        </View>
+                      )}
+                      <Text
+                        style={[
+                          styles.sentenceText,
+                          isCurrent && styles.activeSentenceText,
+                          isPast && styles.pastSentenceText,
+                        ]}
+                      >
+                        {item}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
             </View>
           ) : (
             /* Standard Player Cover Mode */
@@ -119,140 +278,140 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
               {/* Cover Artwork */}
               <View style={[styles.artworkContainer, { width: artworkSize, height: artworkSize * 1.2 }]}>
                 <Image source={{ uri: book.coverUrl }} style={styles.artwork} resizeMode="cover" />
-              {isPlaying && (
-                <View style={styles.pulsingGlow}>
-                  <View style={styles.soundWaves}>
-                    <Ionicons name="stats-chart" size={24} color={Colors.primary} />
+                {isPlaying && (
+                  <View style={styles.pulsingGlow}>
+                    <View style={styles.soundWaves}>
+                      <Ionicons name="stats-chart" size={24} color={Colors.primary} />
+                    </View>
                   </View>
-                </View>
-              )}
-            </View>
+                )}
+              </View>
 
-            {/* Book & Chapter Details */}
-            <View style={styles.metaContainer}>
-              <Text style={styles.bookTitle} numberOfLines={2}>
-                {book.title}
-              </Text>
-              <Text style={styles.chapterTitle} numberOfLines={1}>
-                {chapter.title}
-              </Text>
-              <Text style={styles.authorName}>{book.author}</Text>
+              {/* Book & Chapter Details */}
+              <View style={styles.metaContainer}>
+                <Text style={styles.bookTitle} numberOfLines={2}>
+                  {book.title}
+                </Text>
+                <Text style={styles.chapterTitle} numberOfLines={1}>
+                  {chapter.title}
+                </Text>
+                <Text style={styles.authorName}>{book.author}</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Playback Progress Slider */}
+          <View style={styles.progressSection}>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={Math.max(durationMs > 0 ? durationMs : 60000, positionMs, 1000)}
+              value={positionMs}
+              onSlidingComplete={onSeek}
+              minimumTrackTintColor={Colors.primary}
+              maximumTrackTintColor={Colors.playerSliderTrack}
+              thumbTintColor={Colors.primary}
+            />
+            <View style={styles.timeRow}>
+              <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
+              <Text style={styles.timeText}>{formatTime(Math.max(durationMs > 0 ? durationMs : 60000, positionMs))}</Text>
             </View>
           </View>
-        )}
 
-        {/* Playback Progress Slider */}
-        <View style={styles.progressSection}>
-          <Slider
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={Math.max(durationMs > 0 ? durationMs : 60000, positionMs, 1000)}
-            value={positionMs}
-            onSlidingComplete={onSeek}
-            minimumTrackTintColor={Colors.primary}
-            maximumTrackTintColor={Colors.playerSliderTrack}
-            thumbTintColor={Colors.primary}
-          />
-          <View style={styles.timeRow}>
-            <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
-            <Text style={styles.timeText}>{formatTime(Math.max(durationMs > 0 ? durationMs : 60000, positionMs))}</Text>
+          {/* Primary Controls */}
+          <View style={styles.controlsSection}>
+            {/* Rewind 15s */}
+            <TouchableOpacity
+              style={styles.seekBtn}
+              onPress={() => onSeek(Math.max(0, positionMs - 15000))}
+              accessibilityLabel="Tua lại 15 giây"
+            >
+              <Ionicons name="refresh-outline" size={22} color={Colors.textLight} />
+              <Text style={styles.seekBtnText}>15</Text>
+            </TouchableOpacity>
+
+            {/* Previous Chapter */}
+            <TouchableOpacity
+              style={styles.secondaryControlBtn}
+              onPress={onPrevChapter}
+              accessibilityLabel="Chương trước"
+            >
+              <Ionicons name="play-skip-back" size={26} color={Colors.textPrimary} />
+            </TouchableOpacity>
+
+            {/* Master Play / Pause Button */}
+            <TouchableOpacity
+              style={styles.masterPlayBtn}
+              onPress={onPlayPause}
+              activeOpacity={0.85}
+              accessibilityLabel={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
+            >
+              <Ionicons
+                name={isPlaying ? 'pause' : 'play'}
+                size={36}
+                color={Colors.background}
+                style={!isPlaying ? { marginLeft: 3 } : null}
+              />
+            </TouchableOpacity>
+
+            {/* Next Chapter */}
+            <TouchableOpacity
+              style={styles.secondaryControlBtn}
+              onPress={onNextChapter}
+              accessibilityLabel="Chương sau"
+            >
+              <Ionicons name="play-skip-forward" size={26} color={Colors.textPrimary} />
+            </TouchableOpacity>
+
+            {/* Forward 15s */}
+            <TouchableOpacity
+              style={styles.seekBtn}
+              onPress={() => onSeek(Math.min(durationMs, positionMs + 15000))}
+              accessibilityLabel="Tua tới 15 giây"
+            >
+              <Ionicons name="refresh" size={22} color={Colors.textLight} style={{ transform: [{ scaleX: -1 }] }} />
+              <Text style={styles.seekBtnText}>15</Text>
+            </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Primary Controls */}
-        <View style={styles.controlsSection}>
-          {/* Rewind 15s */}
-          <TouchableOpacity
-            style={styles.seekBtn}
-            onPress={() => onSeek(Math.max(0, positionMs - 15000))}
-            accessibilityLabel="Tua lại 15 giây"
-          >
-            <Ionicons name="refresh-outline" size={22} color={Colors.textLight} />
-            <Text style={styles.seekBtnText}>15</Text>
-          </TouchableOpacity>
+          {/* Bottom Auxiliary Actions */}
+          <View style={styles.bottomBar}>
+            {/* Speed */}
+            <TouchableOpacity style={styles.bottomAction} onPress={onChangeSpeed}>
+              <Text style={styles.speedText}>{speed}x</Text>
+              <Text style={styles.bottomActionLabel}>Tốc độ</Text>
+            </TouchableOpacity>
 
-          {/* Previous Chapter */}
-          <TouchableOpacity
-            style={styles.secondaryControlBtn}
-            onPress={onPrevChapter}
-            accessibilityLabel="Chương trước"
-          >
-            <Ionicons name="play-skip-back" size={26} color={Colors.textPrimary} />
-          </TouchableOpacity>
+            {/* Audio Storage / Cache */}
+            <TouchableOpacity style={styles.bottomAction} onPress={onOpenVoiceSelector}>
+              <Ionicons name="cloud-download-outline" size={20} color={Colors.secondary} />
+              <Text style={styles.bottomActionLabel}>Bộ nhớ</Text>
+            </TouchableOpacity>
 
-          {/* Master Play / Pause Button */}
-          <TouchableOpacity
-            style={styles.masterPlayBtn}
-            onPress={onPlayPause}
-            activeOpacity={0.85}
-            accessibilityLabel={isPlaying ? 'Tạm dừng' : 'Phát tiếp'}
-          >
-            <Ionicons
-              name={isPlaying ? 'pause' : 'play'}
-              size={36}
-              color={Colors.background}
-              style={!isPlaying ? { marginLeft: 3 } : null}
-            />
-          </TouchableOpacity>
+            {/* Sleep Timer */}
+            <TouchableOpacity style={styles.bottomAction} onPress={onOpenSleepTimer}>
+              <Ionicons
+                name="moon"
+                size={20}
+                color={sleepTimerMinutes ? Colors.primary : Colors.textSecondary}
+              />
+              <Text style={styles.bottomActionLabel}>
+                {sleepTimerMinutes ? `${sleepTimerMinutes}m` : 'Hẹn giờ'}
+              </Text>
+            </TouchableOpacity>
 
-          {/* Next Chapter */}
-          <TouchableOpacity
-            style={styles.secondaryControlBtn}
-            onPress={onNextChapter}
-            accessibilityLabel="Chương sau"
-          >
-            <Ionicons name="play-skip-forward" size={26} color={Colors.textPrimary} />
-          </TouchableOpacity>
+            {/* Chapter List */}
+            <TouchableOpacity style={styles.bottomAction} onPress={onOpenChapterList}>
+              <Ionicons name="list" size={20} color={Colors.textSecondary} />
+              <Text style={styles.bottomActionLabel}>Mục lục</Text>
+            </TouchableOpacity>
 
-          {/* Forward 15s */}
-          <TouchableOpacity
-            style={styles.seekBtn}
-            onPress={() => onSeek(Math.min(durationMs, positionMs + 15000))}
-            accessibilityLabel="Tua tới 15 giây"
-          >
-            <Ionicons name="refresh" size={22} color={Colors.textLight} style={{ transform: [{ scaleX: -1 }] }} />
-            <Text style={styles.seekBtnText}>15</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Bottom Auxiliary Actions */}
-        <View style={styles.bottomBar}>
-          {/* Speed */}
-          <TouchableOpacity style={styles.bottomAction} onPress={onChangeSpeed}>
-            <Text style={styles.speedText}>{speed}x</Text>
-            <Text style={styles.bottomActionLabel}>Tốc độ</Text>
-          </TouchableOpacity>
-
-          {/* Audio Storage / Cache */}
-          <TouchableOpacity style={styles.bottomAction} onPress={onOpenVoiceSelector}>
-            <Ionicons name="cloud-download-outline" size={20} color={Colors.secondary} />
-            <Text style={styles.bottomActionLabel}>Bộ nhớ</Text>
-          </TouchableOpacity>
-
-          {/* Sleep Timer */}
-          <TouchableOpacity style={styles.bottomAction} onPress={onOpenSleepTimer}>
-            <Ionicons
-              name="moon"
-              size={20}
-              color={sleepTimerMinutes ? Colors.primary : Colors.textSecondary}
-            />
-            <Text style={styles.bottomActionLabel}>
-              {sleepTimerMinutes ? `${sleepTimerMinutes}m` : 'Hẹn giờ'}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Chapter List */}
-          <TouchableOpacity style={styles.bottomAction} onPress={onOpenChapterList}>
-            <Ionicons name="list" size={20} color={Colors.textSecondary} />
-            <Text style={styles.bottomActionLabel}>Mục lục</Text>
-          </TouchableOpacity>
-
-          {/* Batch Queue */}
-          <TouchableOpacity style={styles.bottomAction} onPress={onOpenBatchQueue}>
-            <Ionicons name="cloud-upload-outline" size={20} color={Colors.textSecondary} />
-            <Text style={styles.bottomActionLabel}>Hàng đợi</Text>
-          </TouchableOpacity>
-        </View>
+            {/* Batch Queue */}
+            <TouchableOpacity style={styles.bottomAction} onPress={onOpenBatchQueue}>
+              <Ionicons name="cloud-upload-outline" size={20} color={Colors.textSecondary} />
+              <Text style={styles.bottomActionLabel}>Hàng đợi</Text>
+            </TouchableOpacity>
+          </View>
         </View>{/* dialogCard */}
       </View>{/* container */}
     </Modal>
@@ -392,35 +551,147 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     marginTop: 4,
   },
+  topRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  activeBgmBtn: {
+    backgroundColor: 'rgba(6, 214, 160, 0.2)',
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  bgmPanel: {
+    backgroundColor: Colors.surfaceElevated,
+    marginHorizontal: 20,
+    marginTop: -4,
+    marginBottom: 8,
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 214, 160, 0.25)',
+  },
+  bgmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  bgmToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+  },
+  bgmToggleBtnActive: {
+    backgroundColor: Colors.primary,
+  },
+  bgmToggleText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    marginLeft: 6,
+  },
+  bgmToggleTextActive: {
+    color: Colors.background,
+  },
+  bgmDuckingBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.primary,
+    backgroundColor: 'rgba(6, 214, 160, 0.12)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  bgmSliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  bgmSlider: {
+    flex: 1,
+    height: 30,
+    marginHorizontal: 8,
+  },
+  bgmVolumeText: {
+    fontSize: 12,
+    color: Colors.textPrimary,
+    fontWeight: '700',
+    minWidth: 36,
+    textAlign: 'right',
+  },
   readerContainer: {
     flex: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingVertical: 10,
   },
   readerHeader: {
-    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-    paddingBottom: 12,
+    paddingBottom: 10,
   },
   readerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
     color: Colors.primary,
   },
   readerSubtitle: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textMuted,
-    marginTop: 4,
+    marginTop: 2,
   },
-  readerScroll: {
-    flex: 1,
+  sentenceCounterBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginLeft: 8,
   },
-  readerContent: {
+  sentenceCounterText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+  },
+  readerListContent: {
+    paddingBottom: 30,
+  },
+  sentenceItem: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginVertical: 3,
+    position: 'relative',
+  },
+  activeSentenceItem: {
+    backgroundColor: 'rgba(6, 214, 160, 0.15)',
+    borderLeftWidth: 3.5,
+    borderLeftColor: Colors.primary,
+    paddingLeft: 34,
+  },
+  activeSpeakerDot: {
+    position: 'absolute',
+    left: 10,
+    top: 13,
+  },
+  sentenceText: {
     fontSize: 16,
     color: Colors.textLight,
-    lineHeight: 28,
+    lineHeight: 27,
     letterSpacing: 0.3,
+  },
+  activeSentenceText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16.5,
+  },
+  pastSentenceText: {
+    color: Colors.textMuted,
+    opacity: 0.7,
   },
   progressSection: {
     paddingHorizontal: 28,

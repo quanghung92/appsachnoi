@@ -79,6 +79,12 @@ export default function App() {
   const [speed, setSpeed] = useState<number>(1.0);
   const [currentVoice, setCurrentVoice] = useState<VoiceOption>(VIETNAMESE_VOICES[0]);
 
+  // BƯỚC 3: Read-Along & BGM State
+  const [sentences, setSentences] = useState<string[]>([]);
+  const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number>(0);
+  const [bgmVolume, setBgmVolume] = useState<number>(0.35);
+  const [bgmEnabled, setBgmEnabled] = useState<boolean>(false);
+
   // Timer State
   const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
   const sleepTimerRef = useRef<any>(null);
@@ -177,10 +183,31 @@ export default function App() {
       setIsPlaying(progress.isSpeaking);
     });
 
+    const unsubSentences = ttsService.addOnSentencesLoadedListener((newSentences) => {
+      setSentences(newSentences);
+    });
+
     return () => {
       unsubscribe();
+      unsubSentences();
     };
   }, []);
+
+  const handleSeekToSentence = (index: number) => {
+    setCurrentSentenceIndex(index);
+    ttsService.seekToSentence(index);
+  };
+
+  const handleToggleBgm = () => {
+    const nextState = !bgmEnabled;
+    setBgmEnabled(nextState);
+    ttsService.setBgmEnabled(nextState);
+  };
+
+  const handleChangeBgmVolume = (val: number) => {
+    setBgmVolume(val);
+    ttsService.setBgmVolume(val);
+  };
 
   // Handle Play/Pause
   const handleTogglePlay = async (targetBook?: Book) => {
@@ -423,18 +450,28 @@ export default function App() {
     if (book) {
       ttsService.setNowPlaying(book.title, chapter?.title || book.author);
     }
-    await ttsService.speak(
-      readingText,
-      // onFinish: Auto-advance to next chapter!
-      () => {
+
+    const voice = (book ? await getKokoroVoiceForBook(book.id) : null) || currentVoice.id || 'duc_an';
+    const chapterUrl = chapter?.url || (book ? crawlerService.buildChapterUrl(book.sourceUrl, chapter?.chapterNumber || 1) : '');
+
+    // BƯỚC 3: Stream trực tiếp qua Kokoro Server Streaming (Latency < 1.6s, Gapless 0ms Ping-Pong)
+    await ttsService.streamChapter({
+      bookId: book?.id || 'default_book',
+      chapterId: chapter?.id || 'c1',
+      text: readingText,
+      url: chapterUrl,
+      voice: voice,
+      speed: speed,
+      startSentenceIndex: startSentenceIndex,
+      onFinish: () => {
         handleNextChapter();
       },
-      (err) => {
-        console.log('TTS Error:', err);
+      onError: (err) => {
+        console.log('[App TTS Error]:', err);
         setIsPlaying(false);
       },
-      // onSentence: ghi nhớ tiến độ từng câu (PLAN B2)
-      (sentenceIndex, totalSentences) => {
+      onSentence: (sentenceIndex, totalSentences) => {
+        setCurrentSentenceIndex(sentenceIndex);
         if (book && chapter) {
           const progress: ReadingProgress = {
             bookId: book.id,
@@ -451,8 +488,10 @@ export default function App() {
           storageService.saveProgress(progress).catch(() => {});
         }
       },
-      startSentenceIndex
-    );
+      onSentencesLoaded: (loadedSentences) => {
+        setSentences(loadedSentences);
+      },
+    });
   };
 
   const startReading = async (
@@ -989,6 +1028,13 @@ export default function App() {
         speed={speed}
         currentVoice={currentVoice}
         sleepTimerMinutes={sleepTimerMinutes}
+        sentences={sentences}
+        currentSentenceIndex={currentSentenceIndex}
+        onSeekToSentence={handleSeekToSentence}
+        bgmVolume={bgmVolume}
+        onChangeBgmVolume={handleChangeBgmVolume}
+        bgmEnabled={bgmEnabled}
+        onToggleBgm={handleToggleBgm}
         onClose={() => setIsFullPlayerVisible(false)}
         onPlayPause={() => handleTogglePlay()}
         onNextChapter={handleNextChapter}

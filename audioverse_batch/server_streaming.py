@@ -706,6 +706,17 @@ def download_full_chapter(book_id: str, chapter_id: str):
     raise HTTPException(status_code=404, detail="Chương chưa được ghép hoàn chỉnh.")
 
 
+@app.get("/api/music/{name}")
+def get_music(name: str):
+    """Phục vụ file nhạc nền (novel_bg.mp3, book_bg1.mp3, book_bg2.mp3) cho client."""
+    music_dir = BASE_DIR / "music"
+    mfile = music_dir / name
+    if mfile.exists():
+        with open(mfile, "rb") as f:
+            return Response(content=f.read(), media_type="audio/mpeg")
+    raise HTTPException(status_code=404, detail="File nhạc nền không tồn tại.")
+
+
 @app.post("/api/sync_upstream_index")
 async def trigger_sync_upstream():
     """Endpoint cho phép App hoặc admin bấm đồng bộ lại 470 file Drive bất kỳ lúc nào."""
