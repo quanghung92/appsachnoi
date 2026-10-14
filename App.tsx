@@ -30,7 +30,6 @@ import { BatchQueueModal } from './src/components/BatchQueueModal';
 import { VoiceSelectorModal } from './src/components/VoiceSelectorModal';
 import { SleepTimerModal } from './src/components/SleepTimerModal';
 import { UrlImportModal } from './src/components/UrlImportModal';
-import { AudioChoiceModal } from './src/components/AudioChoiceModal';
 
 // Screens
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -54,13 +53,6 @@ export default function App() {
     library: 'Tủ Sách Của Tôi',
     queue: 'Hàng Đợi Gen Audio',
   };
-
-  const [audioChoiceState, setAudioChoiceState] = useState<{
-    book: Book;
-    chapter: Chapter;
-    text: string;
-    startSentenceIndex: number;
-  } | null>(null);
 
   // Book Data
   const [books, setBooks] = useState<Book[]>(DRIVE_BOOKS);
@@ -509,9 +501,8 @@ export default function App() {
         const played = await tryPlayChapterAudio(book, chapter, startMs);
         if (played) return;
 
-        // 2. Chưa có audio trên Drive -> Hiển thị popup lựa chọn rõ ràng:
-        // Không tự ý chặn và không tự ý xếp hàng đợi mà không hỏi người dùng
-        setAudioChoiceState({ book, chapter, text, startSentenceIndex });
+        // 2. Chưa có audio trên Drive -> stream trực tiếp luôn, không hỏi
+        await executeRealtimeReading(text, book, chapter, startSentenceIndex);
         return;
       }
 
@@ -1095,32 +1086,6 @@ export default function App() {
       />
 
       {/* Audio Choice Modal khi chương chưa có audio trên Drive */}
-      {audioChoiceState && (
-        <AudioChoiceModal
-          visible={!!audioChoiceState}
-          book={audioChoiceState.book}
-          chapter={audioChoiceState.chapter}
-          onPlayRealtime={() => {
-            const { text, book, chapter, startSentenceIndex } = audioChoiceState;
-            setAudioChoiceState(null);
-            executeRealtimeReading(text, book, chapter, startSentenceIndex);
-          }}
-          onEnqueueBatch={async () => {
-            const { book, chapter } = audioChoiceState;
-            setAudioChoiceState(null);
-            const added = await enqueueChapterForBatch(book, chapter);
-            Alert.alert(
-              'Đã đưa vào hàng đợi',
-              `Đã thêm ${added > 0 ? added : 1} chương vào hàng đợi gen Drive. Bạn có thể mở tab "Hàng Đợi" để theo dõi hoặc bấm "Gen ngay".`,
-              [
-                { text: 'Đóng', style: 'cancel' },
-                { text: 'Xem hàng đợi', onPress: () => setActiveTab('queue') },
-              ]
-            );
-          }}
-          onClose={() => setAudioChoiceState(null)}
-        />
-      )}
     </SafeAreaView>
   );
 }
