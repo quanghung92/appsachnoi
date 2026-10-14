@@ -557,14 +557,16 @@ class TTSService {
       return;
     }
 
-    // Thử câu đầu tiên qua server. Nếu server chết -> thông báo lỗi và fallback giọng hệ thống.
+    // Thử câu đầu tiên qua server. Nếu server chết -> thông báo lỗi rõ ràng cho người dùng, không chạy giả lập.
     const firstUri = await this.fetchChunk(startIdx, myId);
     if (myId !== this.playbackId) return;
     if (!firstUri) {
+      this.cleanUp();
+      const errorMsg = `Không thể kết nối máy chủ Kokoro (${this.getServerUrl()}). Hãy kiểm tra Cloudflare Tunnel hoặc server!`;
+      console.warn(`[TTS] ${errorMsg}`);
       if (this.speakOnError) {
-        this.speakOnError(new Error(`Không thể kết nối máy chủ AI (${this.getServerUrl()}). Hãy kiểm tra điện thoại cùng Wi-Fi với PC!`));
+        this.speakOnError(new Error(errorMsg));
       }
-      this.playViaDeviceSpeech(text, onFinish, onError);
       return;
     }
     this.prefetchAhead(startIdx, myId);
@@ -784,14 +786,19 @@ class TTSService {
     return this.chapterMode;
   }
 
-  private chunkUrl(index: number): string {
+  public getBaseUrl(): string {
     const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+    return base.trim().replace(/\/+$/, '');
+  }
+
+  private chunkUrl(index: number): string {
+    const base = this.getBaseUrl();
     if (this.isLiveStreamingMode && this.currentSessionId) {
       return `${base}/api/stream/chunk?sess=${encodeURIComponent(this.currentSessionId)}&idx=${index}`;
     }
     const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_') || this.currentVoice.id === 'duc_an') ? 'wav' : 'mp3';
     const text = this.sentences[index] || '';
-    return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${this.currentVoice.id}&speed=${this.currentSpeed}`;
+    return `${base}/tts.${ext}?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(this.currentVoice.id)}&speed=${this.currentSpeed}`;
   }
 
   private audioCacheDir(): string {
@@ -1153,21 +1160,23 @@ class TTSService {
     onFinish?: () => void,
     onError?: (error: any) => void
   ) {
-    const wordCount = text.split(/\s+/).length;
-    const wordsPerSec = (140 / 60) * this.currentSpeed;
-    const totalSecs = Math.max(wordCount / wordsPerSec, 4);
-    this.estimatedDurationMs = totalSecs * 1000;
-    this.elapsedMs = 0;
+    if (Platform.OS === 'web') {
+      const wordCount = text.split(/\s+/).length;
+      const wordsPerSec = (140 / 60) * this.currentSpeed;
+      const totalSecs = Math.max(wordCount / wordsPerSec, 4);
+      this.estimatedDurationMs = totalSecs * 1000;
+      this.elapsedMs = 0;
 
-    this.progressInterval = setInterval(() => {
-      if (this.isSpeaking && !this.isPaused) {
-        this.elapsedMs += 250;
-        if (this.elapsedMs > this.estimatedDurationMs) {
-          this.elapsedMs = this.estimatedDurationMs;
+      this.progressInterval = setInterval(() => {
+        if (this.isSpeaking && !this.isPaused) {
+          this.elapsedMs += 250;
+          if (this.elapsedMs > this.estimatedDurationMs) {
+            this.elapsedMs = this.estimatedDurationMs;
+          }
+          this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, true);
         }
-        this.notifyProgress(this.elapsedMs, this.estimatedDurationMs, true);
-      }
-    }, 250);
+      }, 250);
+    }
 
     try {
       Speech.speak(text, {
@@ -1479,12 +1488,12 @@ class TTSService {
     const voiceId = params.voice || this.currentVoice.id || 'duc_an';
     const speed = params.speed || this.currentSpeed || 1.0;
 
-    const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+    const base = this.getBaseUrl();
     console.log(`[TTS Stream] Khởi tạo phiên Live Stream tại ${base}/api/stream/start...`);
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
 
       const res = await fetch(`${base}/api/stream/start`, {
         method: 'POST',
@@ -1525,9 +1534,12 @@ class TTSService {
         this.activeSlot = 'A';
         this.playChunk(startIdx, myId);
         return true;
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn(`[TTS Stream] Server trả về mã lỗi HTTP ${res.status}: ${errText}`);
       }
-    } catch (streamErr) {
-      console.warn('[TTS Stream] /api/stream/start không phản hồi, fallback về chế độ đọc từng câu:', streamErr);
+    } catch (streamErr: any) {
+      console.warn('[TTS Stream] /api/stream/start lỗi kết nối:', streamErr?.message || streamErr);
     }
 
     // Fallback: Chạy chế độ speak câu đơn thông thường nếu server streaming chưa bật

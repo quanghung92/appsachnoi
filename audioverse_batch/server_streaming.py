@@ -432,6 +432,18 @@ async def startup_event():
     asyncio.create_task(background_batch_worker())
     # 2. Tự động đồng bộ 470 file MP3 Seed Cache từ Google Drive
     asyncio.create_task(sync_upstream_seed_index())
+    # 3. Nạp trước Kokoro model vào RAM (Warmup) để request đầu tiên không bị delay
+    def _warmup():
+        try:
+            print("[Warmup] Đang nạp trước mô hình Kokoro vào RAM...")
+            m = get_kokoro_model(DEFAULT_VOICE)
+            m.synthesize("Xin chào bạn đến với AudioVerse.", speed=1.0)
+            print("[Warmup] ✅ Mô hình Kokoro đã sẵn sàng 100% trong RAM!")
+        except Exception as e:
+            print(f"[Warmup Warning] Không thể nạp trước model: {e}")
+
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, _warmup)
 
 
 # ----------------------------------------------------------------
@@ -564,19 +576,16 @@ async def stream_start(req: StreamStartRequest):
 
     start_idx = max(0, min(req.start_chunk_index or 0, len(sentences) - 1))
 
-    # Gen ngay Chunk đầu tiên
-    try:
-        await synthesize_chunk_coalesced(
+    # Kích hoạt gen ngầm Chunk đầu tiên và Chunk tiếp theo (Non-blocking để trả về manifest tức thì < 20ms)
+    asyncio.create_task(
+        synthesize_chunk_coalesced(
             req.book_id,
             req.chapter_id,
             start_idx,
             sentences[start_idx],
             req.voice or DEFAULT_VOICE,
         )
-    except Exception as e:
-        print(f"[Stream Start] Lỗi gen chunk {start_idx}: {e}")
-
-    # Prefetch trước Chunk tiếp theo trong background
+    )
     if start_idx + 1 < len(sentences):
         asyncio.create_task(
             synthesize_chunk_coalesced(
@@ -600,6 +609,36 @@ async def stream_start(req: StreamStartRequest):
             "text": sentences[start_idx],
         },
     }
+
+
+# ----------------------------------------------------------------
+# ENDPOINT TƯƠNG THÍCH NGƯỢC (LEGACY /tts.wav & /tts.mp3)
+# ----------------------------------------------------------------
+
+@app.get("/tts.wav")
+@app.get("/tts.mp3")
+async def tts_legacy_endpoint(
+    text: str = Query(..., description="Văn bản cần đọc"),
+    voice: str = Query(DEFAULT_VOICE, description="Giọng đọc"),
+    speed: float = Query(1.0, description="Tốc độ"),
+):
+    """
+    Endpoint tương thích ngược cho Client cũ hoặc fallback:
+    Nhận text trực tiếp và trả về audio stream MP3/WAV, ngăn app rơi vào chế độ đọc máy giả lập.
+    """
+    update_stream_activity()
+    clean_text = (text or "").strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="Thiếu tham số text")
+
+    clean_voice = voice or DEFAULT_VOICE
+    loop = asyncio.get_running_loop()
+    try:
+        mp3_bytes = await loop.run_in_executor(None, _synthesize_blocking, clean_text, clean_voice)
+        return Response(content=mp3_bytes, media_type="audio/mpeg")
+    except Exception as e:
+        print(f"[Legacy TTS Error] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/stream/chunk")
