@@ -90,7 +90,7 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
     if (!normalized) return [];
     const raw = normalized.match(/[^.!?…\n]+[.!?…\n]+|[^.!?…\n]+$/g) || [normalized];
     return raw.map(s => s.trim()).filter(Boolean);
-  }, [sentences, chapter]);
+  }, [sentences, chapter?.id, chapter?.content]);
 
   // Auto-scroll thông minh tới câu đang đọc (giữ câu ở 1/3 tầm mắt)
   useEffect(() => {
@@ -233,6 +233,15 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
                 keyExtractor={(_, index) => `sentence_${index}`}
                 showsVerticalScrollIndicator={true}
                 contentContainerStyle={styles.readerListContent}
+                onScrollToIndexFailed={(info) => {
+                  setTimeout(() => {
+                    flatListRef.current?.scrollToIndex({
+                      index: info.index,
+                      viewPosition: 0.3,
+                      animated: true,
+                    });
+                  }, 200);
+                }}
                 onScrollBeginDrag={() => {
                   userScrollingRef.current = true;
                   if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);

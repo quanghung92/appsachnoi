@@ -75,9 +75,22 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(background_batch_worker())
     # 2. Tự động đồng bộ 470 file MP3 Seed Cache từ Google Drive
     asyncio.create_task(sync_upstream_seed_index())
-    # 3. Nạp trước Kokoro model vào RAM (Warmup) để request đầu tiên không bị delay
+    # 3. Dọn dẹp cache v1 cũ có lỗi phát âm tiếng Anh (như từ 'do' bị đọc thành 'đu')
+    def _clean_stale_cache():
+        try:
+            removed = 0
+            for old_f in CACHE_DIR.rglob("chunk_[0-9]*.mp3"):
+                old_f.unlink(missing_ok=True)
+                removed += 1
+            if removed > 0:
+                print(f"[Cache Cleaner] 🧹 Đã dọn {removed} file chunk v1 cũ để cập nhật phát âm tiếng Việt chuẩn mới nhất!")
+        except Exception as e:
+            print(f"[Cache Cleaner Warning] {e}")
+
+    # 4. Nạp trước Kokoro model vào RAM (Warmup) để request đầu tiên không bị delay
     def _warmup():
         try:
+            _clean_stale_cache()
             print("[Warmup] Đang nạp trước mô hình Kokoro vào RAM...")
             m = get_kokoro_model(DEFAULT_VOICE)
             m.synthesize("Xin chào bạn đến với AudioVerse.", speed=1.0)
@@ -313,10 +326,13 @@ def save_manifest(book_id: str, chapter_id: str, data: dict):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+CHUNK_PREFIX = "chunk_v2_"
+
+
 def get_cached_chunk_mp3(book_id: str, chapter_id: str, chunk_idx: int) -> Optional[bytes]:
     """Lấy audio MP3 từ ổ cứng nếu đã có."""
     cdir = get_chapter_cache_dir(book_id, chapter_id)
-    cfile = cdir / f"chunk_{chunk_idx}.mp3"
+    cfile = cdir / f"{CHUNK_PREFIX}{chunk_idx}.mp3"
     if cfile.exists() and cfile.stat().st_size > 100:
         with open(cfile, "rb") as f:
             return f.read()
@@ -326,7 +342,7 @@ def get_cached_chunk_mp3(book_id: str, chapter_id: str, chunk_idx: int) -> Optio
 def save_chunk_mp3(book_id: str, chapter_id: str, chunk_idx: int, mp3_bytes: bytes):
     """Lưu audio chunk MP3 vào thư mục đệm cố định."""
     cdir = get_chapter_cache_dir(book_id, chapter_id)
-    cfile = cdir / f"chunk_{chunk_idx}.mp3"
+    cfile = cdir / f"{CHUNK_PREFIX}{chunk_idx}.mp3"
     with open(cfile, "wb") as f:
         f.write(mp3_bytes)
 
@@ -353,7 +369,7 @@ async def auto_stitch_full_chapter(book_id: str, chapter_id: str, total_chunks: 
         concat_txt = cdir / "concat.txt"
         with open(concat_txt, "w", encoding="utf-8") as f:
             for idx in range(total_chunks):
-                chunk_file = cdir / f"chunk_{idx}.mp3"
+                chunk_file = cdir / f"{CHUNK_PREFIX}{idx}.mp3"
                 if chunk_file.exists():
                     f.write(f"file '{chunk_file.resolve()}'\n")
 
@@ -785,6 +801,35 @@ def stream_abort(req: AbortRequest):
             "saved_chunks": len(manifest.get("completed_chunks", [])),
         }
     return {"status": "not_found"}
+
+
+class ClearCacheRequest(BaseModel):
+    book_id: Optional[str] = None
+    chapter_id: Optional[str] = None
+
+
+@app.post("/api/stream/clear_cache")
+def clear_stream_cache(req: Optional[ClearCacheRequest] = None):
+    """Xóa cache audio stream trên server để buộc tái tạo audio chuẩn mới."""
+    count = 0
+    b_id = req.book_id if req else None
+    c_id = req.chapter_id if req else None
+    if b_id and c_id:
+        cdir = get_chapter_cache_dir(b_id, c_id)
+        if cdir.exists():
+            for f in cdir.glob("*.mp3"):
+                f.unlink(missing_ok=True)
+                count += 1
+            mfile = cdir / "manifest.json"
+            if mfile.exists():
+                mfile.unlink(missing_ok=True)
+    elif CACHE_DIR.exists():
+        for f in CACHE_DIR.rglob("*.mp3"):
+            f.unlink(missing_ok=True)
+            count += 1
+        for m in CACHE_DIR.rglob("manifest.json"):
+            m.unlink(missing_ok=True)
+    return {"status": "ok", "deleted_files": count}
 
 
 class BackfillRequest(BaseModel):

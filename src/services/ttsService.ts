@@ -544,6 +544,7 @@ class TTSService {
     this.consecutiveFailures = 0;
 
     this.sentences = this.splitSentences(text);
+    this.notifySentencesLoaded(this.sentences);
     const startIdx = Math.max(0, Math.min(startSentenceIndex, this.sentences.length - 1));
     this.sentenceIndex = startIdx;
     this.chunkUris = new Array(this.sentences.length).fill(null);
@@ -817,12 +818,12 @@ class TTSService {
    */
   private async cachePathFor(index: number): Promise<{ path: string; ext: string }> {
     if (this.isLiveStreamingMode && this.currentSessionId) {
-      const key = `stream_${this.currentSessionId}_${index}`;
+      const key = `stream_v2_${this.currentSessionId}_${index}`;
       const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
       return { path: `${this.audioCacheDir()}${hash}.mp3`, ext: 'mp3' };
     }
     const ext = (this.currentVoice.id.startsWith('vieneu_') || this.currentVoice.id.startsWith('kokoro_') || this.currentVoice.id === 'duc_an') ? 'wav' : 'mp3';
-    const key = `${this.sentences[index]}|${this.currentVoice.id}|${this.currentSpeed}`;
+    const key = `v2|${this.sentences[index] || ''}|${this.currentVoice.id}|${this.currentSpeed}`;
     const hash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, key);
     return { path: `${this.audioCacheDir()}${hash}.${ext}`, ext };
   }
@@ -982,13 +983,6 @@ class TTSService {
       return;
     }
 
-    this.sentenceIndex = index;
-    if (this.onSentenceChange) {
-      try {
-        this.onSentenceChange(index, this.sentences.length);
-      } catch {}
-    }
-
     // Hạ âm lượng nhạc nền khi bắt đầu đọc (Audio Ducking 15%)
     this.duckBgm(true);
 
@@ -1023,6 +1017,16 @@ class TTSService {
         if (myId !== this.playbackId) return;
         this.activeSlot = nextSlot;
         this.playChunk(index + 1, myId);
+      };
+
+      audio.onplaying = () => {
+        if (myId !== this.playbackId) return;
+        this.sentenceIndex = index;
+        if (this.onSentenceChange) {
+          try {
+            this.onSentenceChange(index, this.sentences.length);
+          } catch {}
+        }
       };
 
       audio.ontimeupdate = () => {
@@ -1102,17 +1106,19 @@ class TTSService {
         if (durMs > 0) this.chunkDurationsMs[index] = durMs;
         this.notifyProgress(this.cumulativeMs(index, posMs), this.totalEstimatedMs(), status.playing);
 
+        if (status.playing && this.sentenceIndex !== index) {
+          this.sentenceIndex = index;
+          if (this.onSentenceChange) {
+            try {
+              this.onSentenceChange(index, this.sentences.length);
+            } catch {}
+          }
+        }
+
         if (status.didJustFinish && !hasHandledFinish) {
           hasHandledFinish = true;
           // Khi slot hiện tại kết thúc -> đổi activeSlot sang slot đối diện ngay tức thì
           this.activeSlot = nextSlot;
-          const preloadedNext = nextSlot === 'A' ? this.playerSlotA : this.playerSlotB;
-          if (preloadedNext) {
-            // Gapless 0ms: Kích hoạt play ngay lập tức!
-            try {
-              preloadedNext.play();
-            } catch {}
-          }
           // Dọn slot cũ
           try {
             player.remove();
@@ -1123,6 +1129,14 @@ class TTSService {
           this.playChunk(index + 1, myId);
         }
       });
+
+      // Kích hoạt highlight chính xác khi âm thanh bắt đầu phát
+      this.sentenceIndex = index;
+      if (this.onSentenceChange) {
+        try {
+          this.onSentenceChange(index, this.sentences.length);
+        } catch {}
+      }
 
       player.play();
 

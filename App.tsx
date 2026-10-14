@@ -440,6 +440,7 @@ export default function App() {
         if (fullContent && fullContent.length > readingText.length) {
           readingText = fullContent;
           chapter.content = fullContent;
+          setCurrentChapter({ ...chapter, content: fullContent });
         }
       } catch (e) {
         console.log('[App] Error ensuring full chapter content:', e);
@@ -664,6 +665,8 @@ export default function App() {
   };
 
   const handleSelectChapter = (chapter: Chapter) => {
+    setSentences([]);
+    setCurrentSentenceIndex(0);
     setCurrentChapter(chapter);
     if (currentBook) {
       startReading(chapter.content, currentBook, chapter, 0, 0);
@@ -675,6 +678,8 @@ export default function App() {
     const currentIndex = currentBook.chapters.findIndex((c) => c.id === currentChapter.id);
     if (currentIndex >= 0 && currentIndex < currentBook.chapters.length - 1) {
       const next = currentBook.chapters[currentIndex + 1];
+      setSentences([]);
+      setCurrentSentenceIndex(0);
       setCurrentChapter(next);
       startReading(next.content, currentBook, next);
     } else {
@@ -689,6 +694,8 @@ export default function App() {
     const currentIndex = currentBook.chapters.findIndex((c) => c.id === currentChapter.id);
     if (currentIndex > 0) {
       const prev = currentBook.chapters[currentIndex - 1];
+      setSentences([]);
+      setCurrentSentenceIndex(0);
       setCurrentChapter(prev);
       startReading(prev.content, currentBook, prev);
     }
