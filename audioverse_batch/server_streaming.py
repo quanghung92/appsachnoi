@@ -38,7 +38,10 @@ except ImportError:
     from audioverse_batch.kokoro_vietnamese.normalizer import normalize_text_for_tts
 
 import soundfile as sf
-import imageio_ffmpeg
+try:
+    import imageio_ffmpeg
+except ImportError:
+    imageio_ffmpeg = None
 
 # --- Đường dẫn lưu trữ ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -373,10 +376,62 @@ async def background_batch_worker():
             await asyncio.sleep(2.0)
 
 
+UPSTREAM_INDEX_URL = os.environ.get("UPSTREAM_INDEX_URL", "https://linhsamiu--audioverse-batch-api.modal.run/index")
+
+
+async def sync_upstream_seed_index():
+    """
+    Tự động đồng bộ 470 file MP3 cũ từ Google Drive qua Upstream Modal API
+    về lưu vào data/index.json local khi khởi động server.
+    Đảm bảo chuyển sang server mới không bao giờ bị mất link Drive của các chương cũ!
+    """
+    loop = asyncio.get_running_loop()
+
+    def _fetch_upstream():
+        try:
+            req = urllib.request.Request(
+                UPSTREAM_INDEX_URL,
+                headers={"User-Agent": "AudioVerse-Server/6.1"}
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("chapters", {})
+        except Exception as e:
+            print(f"[Seed Cache Warning] Không thể kết nối tới upstream index: {e}")
+            return None
+
+    upstream_chapters = await loop.run_in_executor(None, _fetch_upstream)
+    if upstream_chapters:
+        local_data = {}
+        if INDEX_PATH.exists():
+            try:
+                with open(INDEX_PATH, "r", encoding="utf-8") as f:
+                    local_data = json.load(f)
+            except Exception:
+                pass
+
+        merged_count = 0
+        for k, v in upstream_chapters.items():
+            if k not in local_data:
+                v["is_complete"] = True
+                local_data[k] = v
+                merged_count += 1
+            else:
+                if not local_data[k].get("download_url") and v.get("download_url"):
+                    local_data[k].update(v)
+
+        with open(INDEX_PATH, "w", encoding="utf-8") as f:
+            json.dump(local_data, f, ensure_ascii=False, indent=2)
+
+        print(f"[Seed Cache] ✅ ĐÃ ĐỒNG BỘ THÀNH CÔNG {len(local_data)} CHƯƠNG MP3 (Đã nạp {merged_count} chương mới từ Drive)!")
+
+
 @app.on_event("startup")
 async def startup_event():
-    # Khởi chạy background worker
+    # 1. Khởi chạy background worker (Preemption & Backfill)
     asyncio.create_task(background_batch_worker())
+    # 2. Tự động đồng bộ 470 file MP3 Seed Cache từ Google Drive
+    asyncio.create_task(sync_upstream_seed_index())
 
 
 # ----------------------------------------------------------------
@@ -649,6 +704,13 @@ def download_full_chapter(book_id: str, chapter_id: str):
         with open(full_mp3, "rb") as f:
             return Response(content=f.read(), media_type="audio/mpeg")
     raise HTTPException(status_code=404, detail="Chương chưa được ghép hoàn chỉnh.")
+
+
+@app.post("/api/sync_upstream_index")
+async def trigger_sync_upstream():
+    """Endpoint cho phép App hoặc admin bấm đồng bộ lại 470 file Drive bất kỳ lúc nào."""
+    asyncio.create_task(sync_upstream_seed_index())
+    return {"status": "sync_started", "upstream_url": UPSTREAM_INDEX_URL}
 
 
 if __name__ == "__main__":
