@@ -4,7 +4,14 @@
 # Đặt trong thư mục audioverse_batch, chạy: bash control.sh
 
 BATCH_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_PY="/home/hungnq/audioverse-venv/bin/python"
+# Tự tìm python: ưu tiên venv trong thư mục project, rồi mới tới python3 hệ thống
+if [ -x "$BATCH_DIR/venv/bin/python" ]; then
+    VENV_PY="$BATCH_DIR/venv/bin/python"
+elif [ -x "$(dirname "$BATCH_DIR")/venv/bin/python" ]; then
+    VENV_PY="$(dirname "$BATCH_DIR")/venv/bin/python"
+else
+    VENV_PY="python3"
+fi
 WORKER="/home/hungnq/only_me/local_batch.py"
 STREAM_LOG="$BATCH_DIR/server.log"
 # --- Hàm kiểm tra ---
