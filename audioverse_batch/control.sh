@@ -86,6 +86,25 @@ pull_latest() {
     fi
 }
 
+upload_to_drive() {
+    echo "Đang quét các chương đã stream xong để đẩy lên Drive..."
+    cd "$BATCH_DIR" || exit 1
+    # Tìm python (ưu tiên venv trong project)
+    if [ -x "$BATCH_DIR/venv/bin/python" ]; then
+        PY="$BATCH_DIR/venv/bin/python"
+    elif [ -x "$(dirname "$BATCH_DIR")/venv/bin/python" ]; then
+        PY="$(dirname "$BATCH_DIR")/venv/bin/python"
+    else
+        PY="python3"
+    fi
+    if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ] || [ -z "$GOOGLE_REFRESH_TOKEN" ]; then
+        echo "✗ Thiếu env var: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN"
+        echo "  Export 3 biến này trước khi chạy."
+        return
+    fi
+    "$PY" batch_upload_drive.py
+}
+
 # --- Menu chính ---
 while true; do
     clear
@@ -102,9 +121,10 @@ while true; do
     echo "  6. TẮT batch cron"
     echo "  7. Kéo code mới từ GitHub"
     echo "  8. Xem log streaming server"
+    echo "  9. Đẩy chương đã stream xong lên Google Drive"
     echo "  0. Thoát"
     echo ""
-    read -p "Chọn [0-8]: " choice
+    read -p "Chọn [0-9]: " choice
     echo ""
     case $choice in
         1) start_stream ;;
@@ -115,6 +135,7 @@ while true; do
         6) disable_cron ;;
         7) pull_latest ;;
         8) tail -50 "$STREAM_LOG" 2>/dev/null || echo "Chưa có log." ;;
+        9) upload_to_drive ;;
         0) echo "Tạm biệt!"; exit 0 ;;
         *) echo "Lựa chọn không hợp lệ." ;;
     esac
