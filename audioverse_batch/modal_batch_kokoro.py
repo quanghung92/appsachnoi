@@ -757,7 +757,6 @@ def _run_batch(max_gemini: int = MAX_GEMINI_PER_RUN, max_kokoro: int = MAX_KOKOR
     secrets=_SECRETS,
     cpu=2.0,
     memory=2048,
-    schedule=modal.Cron(CRON_SCHEDULE),
     timeout=14400,
 )
 def batch_nightly(max_gemini: int = MAX_GEMINI_PER_RUN):
