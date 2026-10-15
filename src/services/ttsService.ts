@@ -637,6 +637,11 @@ class TTSService {
     const myId = this.playbackId;
     this.isSpeaking = true;
     this.isPaused = false;
+    // Phát lại nhạc nền nếu đang bật (stop() ở trên đã dừng nó)
+    if (this.bgmEnabled) {
+      this.startBgm();
+      this.duckBgm(true);
+    }
     this.speakOnFinish = onFinish || null;
     this.speakOnError = onError || null;
     this.onSentenceChange = onSentence || null;
@@ -693,6 +698,11 @@ class TTSService {
     const myId = this.playbackId;
     this.isSpeaking = true;
     this.isPaused = false;
+    // Phát lại nhạc nền nếu đang bật (stop() ở trên đã dừng nó)
+    if (this.bgmEnabled) {
+      this.startBgm();
+      this.duckBgm(true);
+    }
     this.chapterMode = true;
     this.chapterDurationMs = (knownDurationMs && knownDurationMs > 0) ? knownDurationMs : 0;
     this.chapterOnMsProgress = onMsProgress || null;
@@ -1456,6 +1466,7 @@ class TTSService {
     this.chapterDurationMs = 0;
     this.chapterOnMsProgress = null;
     this.duckBgm(false);
+    this.stopBgm(); // dừng hẳn nhạc nền khi truyện tắt
     this.clearDeviceFallback(); // dừng theo dõi auto-upgrade
 
     if (this.currentSessionId) {
@@ -1674,6 +1685,11 @@ class TTSService {
     const myId = this.playbackId;
     this.isSpeaking = true;
     this.isPaused = false;
+    // Phát lại nhạc nền nếu đang bật (stop() ở trên đã dừng nó)
+    if (this.bgmEnabled) {
+      this.startBgm();
+      this.duckBgm(true);
+    }
     this.speakOnFinish = params.onFinish || null;
     this.speakOnError = params.onError || null;
     this.onSentenceChange = params.onSentence || null;
