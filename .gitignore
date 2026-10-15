@@ -61,3 +61,10 @@ venv/
 .venv/
 __pycache__/
 *.pyc
+
+# Runtime files on Ubuntu streaming server (local only)
+audioverse_batch/data/stream_cache/
+audioverse_batch/server.log
+audioverse_batch/tunnel.log
+*.deb
+*.log
