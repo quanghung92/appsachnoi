@@ -68,3 +68,4 @@ audioverse_batch/server.log
 audioverse_batch/tunnel.log
 *.deb
 *.log
+*.pid
