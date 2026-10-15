@@ -84,6 +84,24 @@ export default function App() {
   // Modals
   const [isFullPlayerVisible, setIsFullPlayerVisible] = useState<boolean>(false);
   const [isChapterListVisible, setIsChapterListVisible] = useState<boolean>(false);
+
+  /** Quét trạng thái offline khi mở danh sách chương (BƯỚC 4). */
+  useEffect(() => {
+    if (!isChapterListVisible || !currentBook) return;
+    (async () => {
+      const ids = new Set<string>();
+      // Kiểm tra tối đa 50 chương đầu để tránh chậm (lazy check)
+      const toCheck = currentBook.chapters.slice(0, 50);
+      for (const ch of toCheck) {
+        try {
+          if (await ttsService.isChapterDownloaded(currentBook.id, ch.id)) {
+            ids.add(ch.id);
+          }
+        } catch {}
+      }
+      setOfflineChapterIds(ids);
+    })();
+  }, [isChapterListVisible, currentBook?.id]);
   const [isBatchQueueVisible, setIsBatchQueueVisible] = useState<boolean>(false);
   const [isVoiceSelectorVisible, setIsVoiceSelectorVisible] = useState<boolean>(false);
   const [isSleepTimerVisible, setIsSleepTimerVisible] = useState<boolean>(false);
@@ -98,6 +116,35 @@ export default function App() {
     ready: Set<string>;
     pending: Set<string>;
   }>({ ready: new Set<string>(), pending: new Set<string>() });
+
+  /** Chương đã tải về máy để nghe offline (BƯỚC 4). */
+  const [offlineChapterIds, setOfflineChapterIds] = useState<Set<string>>(new Set<string>());
+
+  /** Tải 1 chương về máy để nghe offline. */
+  const handleDownloadChapter = async (chapter: Chapter) => {
+    if (!currentBook) return;
+    try {
+      Alert.alert('Đang tải', `Đang tải "${chapter.title}" về máy...`);
+      // Lấy Drive URL nếu có
+      const index = await batchService.getChapterIndex(currentBook.id).catch(() => ({} as any));
+      const entry = index?.[chapter.id] || index?.[toIndexChapterId(chapter.id)];
+      const driveUrl = entry?.download_url;
+      const uri = await ttsService.downloadChapterForOffline(
+        currentBook.id, chapter.id, driveUrl,
+        (loaded, total) => {
+          // TODO: hiển thị progress (bản sau)
+        }
+      );
+      if (uri) {
+        setOfflineChapterIds(prev => new Set(prev).add(chapter.id));
+        Alert.alert('Hoàn thành', `"${chapter.title}" đã tải xong, có thể nghe offline.`);
+      } else {
+        Alert.alert('Lỗi', 'Không tải được chương. Thử lại sau.');
+      }
+    } catch (e) {
+      Alert.alert('Lỗi', 'Không tải được chương.');
+    }
+  };
 
   // Nạp sách đã lưu + tiến độ nghe khi mở app (phục hồi sách/chương đang nghe dở trên F5)
   useEffect(() => {
@@ -254,11 +301,22 @@ export default function App() {
    * Trả về true nếu phát được (chapter-audio mode), false để App dùng Kokoro realtime.
    * sentenceIndex = -1 trong ReadingProgress đánh dấu chapter mode (tiếp tục từ positionMs).
    */
-  const tryPlayChapterAudio = async (book: Book, chapter: Chapter, startMs: number = 0): Promise<boolean> => {
-    if (!batchService.isConfigured()) return false;
+  const tryPlayChapterAudio = async (book: Book, chapter: Chapter, startMs: number = 0, offlineUri?: string): Promise<boolean> => {
+    // Ưu tiên file offline đã tải về máy (BƯỚC 4)
+    let localUri = offlineUri;
+    if (!localUri) {
+      if (!batchService.isConfigured()) return false;
+      try {
+        setLoadingBookId(book.id);
+        const driveUri = await batchService.getChapterAudioFile(book.id, chapter.id);
+        if (!driveUri) return false;
+        localUri = driveUri;
+      } catch {
+        return false;
+      }
+    }
     try {
       setLoadingBookId(book.id);
-      const localUri = await batchService.getChapterAudioFile(book.id, chapter.id);
       if (!localUri) return false;
 
       setIsPlaying(true);
@@ -496,6 +554,14 @@ export default function App() {
   ) => {
     try {
       if (book) setLoadingBookId(book.id);
+      // 0. Ưu tiên cao nhất: file đã tải offline về máy (BƯỚC 4)
+      if (book && chapter && startSentenceIndex <= 0) {
+        const offlineUri = await ttsService.getOfflineChapterUri(book.id, chapter.id);
+        if (offlineUri) {
+          const played = await tryPlayChapterAudio(book, chapter, startMs, offlineUri);
+          if (played) return;
+        }
+      }
       // 1. Nếu có file MP3 trên Drive -> phát ngay bằng Drive audio player
       if (book && chapter && batchService.isConfigured() && startSentenceIndex <= 0) {
         const played = await tryPlayChapterAudio(book, chapter, startMs);
@@ -1060,8 +1126,10 @@ export default function App() {
         currentChapter={currentChapter}
         readyChapterIds={chapterAudioState.ready}
         pendingChapterIds={chapterAudioState.pending}
+        offlineChapterIds={offlineChapterIds}
         onClose={() => setIsChapterListVisible(false)}
         onSelectChapter={handleSelectChapter}
+        onDownloadChapter={handleDownloadChapter}
       />
 
       {/* Audio Storage & Offline Manager Modal */}
