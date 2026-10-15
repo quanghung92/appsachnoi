@@ -4,6 +4,13 @@
 # Đặt trong thư mục audioverse_batch, chạy: bash control.sh
 
 BATCH_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Nạp cấu hình gist từ file local (nếu có)
+GIST_ENV_FILE="$BATCH_DIR/.gist.env"
+if [ -f "$GIST_ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$GIST_ENV_FILE"; set +a
+fi
 # Tự tìm python: ưu tiên venv trong thư mục project (cả Linux và Windows), rồi mới tới python hệ thống
 if [ -x "$BATCH_DIR/venv/bin/python" ]; then
     VENV_PY="$BATCH_DIR/venv/bin/python"
@@ -194,6 +201,49 @@ PYEOF
     fi
 }
 
+# Cấu hình Gist: xem/sửa/lưu token, gist ID, tên máy vào file local .gist.env
+setup_gist_config() {
+    echo "========== CẤU HÌNH GIST =========="
+    local cur_token="${GITHUB_TOKEN:-}"
+    local cur_gist="${GIST_ID:-}"
+    local cur_machine="${MACHINE_NAME:-$(hostname 2>/dev/null || echo '')}"
+
+    if [ -n "$cur_token" ]; then
+        echo "  Token hiện tại : ${cur_token:0:7}...${cur_token: -4} (đã lưu)"
+    else
+        echo "  Token hiện tại : (chưa có)"
+    fi
+    echo "  Gist ID hiện tại: ${cur_gist:-(chưa có)}"
+    echo "  Tên máy hiện tại: ${cur_machine:-(chưa có)}"
+    echo ""
+    echo "Nhập giá trị mới (Enter để giữ nguyên):"
+
+    read -p "  GitHub token (scope gist): " new_token
+    read -p "  Gist ID: " new_gist
+    read -p "  Tên máy (vd: nha, ubuntu): " new_machine
+
+    [ -n "$new_token" ] && cur_token="$new_token"
+    [ -n "$new_gist" ] && cur_gist="$new_gist"
+    [ -n "$new_machine" ] && cur_machine="$new_machine"
+
+    if [ -z "$cur_token" ] || [ -z "$cur_gist" ]; then
+        echo "✗ Thiếu token hoặc Gist ID, chưa lưu."
+        return 1
+    fi
+
+    cat > "$GIST_ENV_FILE" <<EOF
+# Cấu hình Gist cho AudioVerse - file local, KHÔNG commit lên git
+GITHUB_TOKEN=$cur_token
+GIST_ID=$cur_gist
+MACHINE_NAME=$cur_machine
+EOF
+    # Nạp ngay để dùng luôn trong phiên này
+    GITHUB_TOKEN="$cur_token"
+    GIST_ID="$cur_gist"
+    MACHINE_NAME="$cur_machine"
+    echo "✓ Đã lưu vào $GIST_ENV_FILE"
+}
+
 start_tunnel() {
     if is_tunnel_running; then echo "Tunnel đang chạy rồi."; return; fi
     local cf_bin
@@ -278,6 +328,17 @@ upload_to_drive() {
 }
 
 # --- Menu chính ---
+
+# Lần đầu mở: nếu chưa cấu hình gist thì hỏi luôn
+if [ -z "$GITHUB_TOKEN" ] || [ -z "$GIST_ID" ]; then
+    echo "Chưa cấu hình GitHub Gist cho tunnel URL."
+    read -p "Cấu hình ngay? (Y/n): " ask_setup
+    if [[ ! "$ask_setup" =~ ^[Nn]$ ]]; then
+        setup_gist_config
+        echo ""
+        read -p "Nhấn Enter để vào menu chính..."
+    fi
+fi
 while true; do
     clear
     echo "╔══════════════════════════════════════╗"
@@ -295,9 +356,10 @@ while true; do
     echo "  8. Xem log streaming server"
     echo "  9. Đẩy chương đã stream xong lên Google Drive"
     echo "  10. Cập nhật URL tunnel lên Gist (cho app tự lấy)"
+    echo "  11. Cấu hình Gist (xem/sửa token, Gist ID, tên máy)"
     echo "  0. Thoát"
     echo ""
-    read -p "Chọn [0-10]: " choice
+    read -p "Chọn [0-11]: " choice
     echo ""
     case $choice in
         1) start_stream ;;
@@ -318,6 +380,7 @@ while true; do
                 echo "✗ Chưa thấy URL trong tunnel.log — tunnel có đang chạy không?"
             fi
             ;;
+        11) setup_gist_config ;;
         0) echo "Tạm biệt!"; exit 0 ;;
         *) echo "Lựa chọn không hợp lệ." ;;
     esac
