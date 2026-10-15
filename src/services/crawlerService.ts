@@ -2,6 +2,7 @@ import { Book, Chapter } from '../types';
 import { DRIVE_BOOKS } from '../data/books';
 import { WEB_NOVELS } from '../data/novels';
 import { ttsService } from './ttsService';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 export interface CrawlResult {
   status: string;
@@ -40,15 +41,11 @@ export class CrawlerService {
    */
   private async crawlDirect(url: string): Promise<CrawlResult | null> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(url, {
-        signal: controller.signal,
+      const res = await fetchWithTimeout(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-      });
-      clearTimeout(timeoutId);
+      }, 12000);
       if (!res.ok) return null;
       const html = await res.text();
       let content = '';
@@ -115,10 +112,7 @@ export class CrawlerService {
     try {
       const baseUrl = ttsService.getServerUrl();
       const apiUrl = `${baseUrl}/api/crawl?url=${encodeURIComponent(trimmed)}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
-      const res = await fetch(apiUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      const res = await fetchWithTimeout(apiUrl, {}, 20000);
       if (res.ok) {
         const data = (await res.json()) as CrawlResult;
         if (data.status === 'ok' && data.content && data.content.length > 100) {
@@ -151,10 +145,7 @@ export class CrawlerService {
         const apiUrl = `${baseUrl}/api/crawl_chapter_titles?base_url=${encodeURIComponent(
           sourceUrl
         )}&start=${startNum}&count=${count}`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
-        const res = await fetch(apiUrl, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        const res = await fetchWithTimeout(apiUrl, {}, 12000);
 
         if (res.ok) {
           const data = await res.json();
@@ -439,29 +430,84 @@ export class CrawlerService {
   }
 
   /**
-   * Mock parser for local files (.txt, .pdf, .epub)
+   * Parser cho file local .txt: chia nội dung thật thành các chương.
+   * Tìm tiêu đề chương theo pattern "Chương/Hồi/Quyển + số", nếu không có thì chia theo độ dài.
    */
-  public parseLocalFile(fileName: string, contentSnippet?: string): Book {
+  public parseLocalFile(fileName: string, content?: string): Book {
+    const text = (content || '').trim();
+    const title = fileName.replace(/\.[^/.]+$/, '');
+    const chapters: Chapter[] = [];
+
+    if (text) {
+      // Tách theo tiêu đề chương
+      const chapterRegex = /^(?:Chương|Hồi|Quyển)\s*\d+.*$/gim;
+      const matches = [...text.matchAll(chapterRegex)];
+
+      if (matches.length >= 2) {
+        for (let i = 0; i < matches.length; i++) {
+          const start = matches[i].index || 0;
+          const end = i + 1 < matches.length ? matches[i + 1].index || text.length : text.length;
+          const chapterText = text.slice(start, end).trim();
+          const titleLine = (matches[i][0] || '').trim().slice(0, 80);
+          if (chapterText.length > 50) {
+            chapters.push({
+              id: `local_c${i + 1}`,
+              title: titleLine || `Chương ${i + 1}`,
+              duration: '',
+              content: chapterText,
+            });
+          }
+        }
+      }
+
+      // Không tìm được tiêu đề chương: chia theo độ dài ~5000 ký tự
+      if (chapters.length === 0) {
+        const CHUNK_SIZE = 5000;
+        let idx = 0;
+        for (let pos = 0; pos < text.length; pos += CHUNK_SIZE) {
+          // Cắt ở ranh giới câu gần nhất
+          let end = Math.min(pos + CHUNK_SIZE, text.length);
+          if (end < text.length) {
+            const lastPeriod = text.lastIndexOf('.', end);
+            const lastNewline = text.lastIndexOf('\n', end);
+            const cutAt = Math.max(lastPeriod, lastNewline);
+            if (cutAt > pos + 1000) end = cutAt + 1;
+          }
+          const chunk = text.slice(pos, end).trim();
+          if (chunk.length > 50) {
+            idx++;
+            chapters.push({
+              id: `local_c${idx}`,
+              title: `Phần ${idx}`,
+              duration: '',
+              content: chunk,
+            });
+          }
+        }
+      }
+    }
+
+    // Fallback: không có nội dung đọc được
+    if (chapters.length === 0) {
+      chapters.push({
+        id: 'local_c1',
+        title: 'Chương 1',
+        duration: '',
+        content: `Không đọc được nội dung file ${fileName}.`,
+      });
+    }
+
     return {
       id: `local_file_${Date.now()}`,
-      title: fileName.replace(/\.[^/.]+$/, ''),
+      title,
       author: 'Tệp Từ Máy',
       category: 'Tệp Cá Nhân',
-      description: `Sách được tải lên từ bộ nhớ điện thoại: ${fileName}`,
+      description: `Sách được tải lên từ bộ nhớ điện thoại: ${fileName} (${chapters.length} phần)`,
       coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=500&auto=format&fit=crop&q=60',
       type: 'local_file',
       rating: 5.0,
       listenCount: 'Ngoại tuyến',
-      chapters: [
-        {
-          id: 'local_c1',
-          title: 'Chương 1: Khởi Đầu Tài Liệu',
-          duration: '07:15',
-          content:
-            contentSnippet ||
-            `Tài liệu ${fileName} đã được mở thành công trên AudioVerse. Bạn có thể nghe toàn bộ văn bản của tài liệu này bất cứ lúc nào, kể cả khi không có kết nối internet.`
-        }
-      ]
+      chapters,
     };
   }
 }
