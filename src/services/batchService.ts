@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 /**
  * BatchService: nối app với batch server (Modal cron) — "nhà máy" audio.
@@ -135,15 +136,11 @@ class BatchService {
   public async importBook(driveUrl: string, title?: string): Promise<ImportBookResult | null> {
     if (!this.isConfigured()) return null;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 120000);
-      const res = await fetch(`${this.getServerUrl()}/import_book`, {
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/import_book`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ drive_url: driveUrl, title: title || '' }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 120000);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.log('[Batch] import_book failed:', err);
@@ -160,15 +157,11 @@ class BatchService {
   public async importNovel(url: string): Promise<ImportNovelResult | null> {
     if (!this.isConfigured()) return null;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
-      const res = await fetch(`${this.getServerUrl()}/import_novel`, {
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/import_novel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 60000);
       if (!res.ok) return null;
       return (await res.json()) as ImportNovelResult;
     } catch (e) {
@@ -181,15 +174,11 @@ class BatchService {
   public async triggerNow(maxChapters: number = 10): Promise<boolean> {
     if (!this.isConfigured()) return false;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(`${this.getServerUrl()}/trigger`, {
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ max_chapters: maxChapters }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 15000);
       return res.ok;
     } catch (e) {
       console.log('[Batch] trigger error:', e);
@@ -241,15 +230,11 @@ class BatchService {
   public async enqueueChapters(items: BatchChapterItem[], position: QueuePosition = 'back'): Promise<number> {
     if (!this.isConfigured() || items.length === 0) return 0;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
-      const res = await fetch(`${this.getServerUrl()}/enqueue`, {
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/enqueue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items, position }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 20000);
       if (!res.ok) return 0;
       const data = await res.json();
       return data.added || 0;
@@ -272,13 +257,11 @@ class BatchService {
       return indexCacheState.chapters;
     }
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${this.getServerUrl()}/index?book_id=${encodeURIComponent(resolvedId)}`,
-        { signal: controller.signal }
+        {},
+        15000
       );
-      clearTimeout(timeoutId);
       if (!res.ok) return indexCacheState?.chapters || {};
       const data = await res.json();
       const chapters = (data.chapters || {}) as Record<string, BatchChapterAudio>;
@@ -328,13 +311,10 @@ class BatchService {
   public async getQueue(bookId?: string): Promise<BatchQueueItem[]> {
     if (!this.isConfigured()) return [];
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
       const url = bookId
         ? `${this.getServerUrl()}/queue?book_id=${encodeURIComponent(bookId)}`
         : `${this.getServerUrl()}/queue`;
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      const res = await fetchWithTimeout(url, {}, 15000);
       if (!res.ok) return [];
       const data = await res.json();
       return (data.queue || []) as BatchQueueItem[];
@@ -394,15 +374,11 @@ class BatchService {
   public async removeBook(bookId: string): Promise<boolean> {
     if (!this.isConfigured()) return false;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      const res = await fetch(`${this.getServerUrl()}/remove_book`, {
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/remove_book`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ book_id: bookId }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 30000);
       this.invalidateIndexCache();
       return res.ok;
     } catch (e) {
@@ -464,10 +440,7 @@ class BatchService {
   public async getStatus(): Promise<{ pending: number; done: number } | null> {
     if (!this.isConfigured()) return null;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(`${this.getServerUrl()}/status`, { signal: controller.signal });
-      clearTimeout(timeoutId);
+      const res = await fetchWithTimeout(`${this.getServerUrl()}/status`, {}, 10000);
       if (!res.ok) return null;
       return (await res.json()) as { pending: number; done: number };
     } catch {
