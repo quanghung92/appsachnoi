@@ -69,3 +69,4 @@ audioverse_batch/tunnel.log
 *.deb
 *.log
 *.pid
+.gist.env
