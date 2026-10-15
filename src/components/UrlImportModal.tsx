@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Colors } from '../theme/colors';
 import { crawlerService } from '../services/crawlerService';
 import { batchService } from '../services/batchService';
@@ -126,18 +127,40 @@ export const UrlImportModal: React.FC<UrlImportModalProps> = ({
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['*/*'],
+        type: ['text/plain', 'text/*'],
         copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
-        const book = crawlerService.parseLocalFile(file.name);
+        const lowerName = (file.name || '').toLowerCase();
+        // Chỉ hỗ trợ TXT: đọc nội dung thật. PDF/EPUB cần parser riêng.
+        if (!lowerName.endsWith('.txt')) {
+          Alert.alert(
+            'Chưa hỗ trợ',
+            `Định dạng "${file.name}" chưa được hỗ trợ. Hiện tại chỉ đọc được file .txt.`
+          );
+          return;
+        }
+        const uri = file.uri;
+        if (!uri) {
+          Alert.alert('Lỗi', 'Không đọc được file đã chọn.');
+          return;
+        }
+        const content = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        if (!content || !content.trim()) {
+          Alert.alert('Lỗi', 'File trống, không có nội dung để đọc.');
+          return;
+        }
+        const book = crawlerService.parseLocalFile(file.name, content);
         onBookImported(book, true);
         onClose();
       }
-    } catch {
-      console.log('Pick document cancelled or failed');
+    } catch (e) {
+      console.log('Pick document failed:', e);
+      Alert.alert('Lỗi', 'Không đọc được file đã chọn.');
     }
   };
 
