@@ -12,8 +12,11 @@ interface ChapterListModalProps {
   readyChapterIds?: Set<string>;
   /** Chương đang nằm trong hàng đợi gen trên server. */
   pendingChapterIds?: Set<string>;
+  /** Chương đã tải về máy để nghe offline. */
+  offlineChapterIds?: Set<string>;
   onClose: () => void;
   onSelectChapter: (chapter: Chapter) => void;
+  onDownloadChapter?: (chapter: Chapter) => void;
 }
 
 export const ChapterListModal: React.FC<ChapterListModalProps> = ({
@@ -22,8 +25,10 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
   currentChapter,
   readyChapterIds,
   pendingChapterIds,
+  offlineChapterIds,
   onClose,
   onSelectChapter,
+  onDownloadChapter,
 }) => {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
@@ -52,43 +57,57 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
               const isSelected = currentChapter?.id === item.id;
               const hasAudio = readyChapterIds?.has(item.id) ?? false;
               const isPending = !hasAudio && (pendingChapterIds?.has(item.id) ?? false);
+              const isOffline = offlineChapterIds?.has(item.id) ?? false;
               return (
-                <TouchableOpacity
-                  style={[styles.item, isSelected && styles.selectedItem]}
-                  onPress={() => {
-                    onSelectChapter(item);
-                    onClose();
-                  }}
-                >
-                  <View style={styles.itemLeft}>
-                    <Text style={[styles.indexNumber, isSelected && { color: Colors.primary }]}>
-                      {index + 1 < 10 ? `0${index + 1}` : index + 1}
-                    </Text>
-                    <View style={styles.itemMeta}>
-                      <Text
-                        style={[styles.chapterTitle, isSelected && { color: Colors.primary }]}
-                        numberOfLines={1}
-                      >
-                        {item.title}
+                <View style={[styles.item, isSelected && styles.selectedItem]}>
+                  <TouchableOpacity
+                    style={styles.itemMain}
+                    onPress={() => {
+                      onSelectChapter(item);
+                      onClose();
+                    }}
+                  >
+                    <View style={styles.itemLeft}>
+                      <Text style={[styles.indexNumber, isSelected && { color: Colors.primary }]}>
+                        {index + 1 < 10 ? `0${index + 1}` : index + 1}
                       </Text>
-                      {item.duration && (
-                        <Text style={styles.durationText}>{item.duration}</Text>
-                      )}
-                      {hasAudio && (
-                        <Text style={styles.audioReadyText}>✓ Có audio giọng Gemini</Text>
-                      )}
-                      {isPending && (
-                        <Text style={styles.audioPendingText}>⏳ Đang chờ gen audio</Text>
-                      )}
+                      <View style={styles.itemMeta}>
+                        <Text
+                          style={[styles.chapterTitle, isSelected && { color: Colors.primary }]}
+                          numberOfLines={1}
+                        >
+                          {item.title}
+                        </Text>
+                        {item.duration && (
+                          <Text style={styles.durationText}>{item.duration}</Text>
+                        )}
+                        {hasAudio && (
+                          <Text style={styles.audioReadyText}>✓ Có audio giọng Gemini</Text>
+                        )}
+                        {isPending && (
+                          <Text style={styles.audioPendingText}>⏳ Đang chờ gen audio</Text>
+                        )}
+                        {isOffline && (
+                          <Text style={styles.offlineText}>📥 Đã tải offline</Text>
+                        )}
+                      </View>
                     </View>
-                  </View>
 
-                  {isSelected ? (
-                    <Ionicons name="volume-high" size={20} color={Colors.primary} />
-                  ) : (
-                    <Ionicons name="play-circle-outline" size={20} color={Colors.textMuted} />
+                    {isSelected ? (
+                      <Ionicons name="volume-high" size={20} color={Colors.primary} />
+                    ) : (
+                      <Ionicons name="play-circle-outline" size={20} color={Colors.textMuted} />
+                    )}
+                  </TouchableOpacity>
+                  {onDownloadChapter && !isOffline && (
+                    <TouchableOpacity
+                      style={styles.downloadBtn}
+                      onPress={() => onDownloadChapter(item)}
+                    >
+                      <Ionicons name="download-outline" size={20} color={Colors.textMuted} />
+                    </TouchableOpacity>
                   )}
-                </TouchableOpacity>
+                </View>
               );
             }}
           />
@@ -159,6 +178,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     marginBottom: 6,
+  },
+  itemMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginRight: 8,
+  },
+  downloadBtn: {
+    padding: 8,
+  },
+  offlineText: {
+    fontSize: 10.5,
+    color: Colors.primary,
+    fontWeight: '600',
+    marginTop: 3,
   },
   selectedItem: {
     backgroundColor: 'rgba(6, 214, 160, 0.1)',
