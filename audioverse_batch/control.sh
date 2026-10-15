@@ -46,6 +46,13 @@ stop_stream() {
 
 start_tunnel() {
     if is_tunnel_running; then echo "Tunnel đang chạy rồi."; return; fi
+    if ! command -v cloudflared > /dev/null 2>&1; then
+        echo "Chưa tìm thấy cloudflared trong PATH."
+        echo "Cách 1: Chạy lệnh cài đặt: winget install --id Cloudflare.cloudflared -e"
+        echo "Cách 2: Tải file cloudflared-windows-amd64.exe từ Cloudflare rồi đổi tên thành cloudflared.exe và đặt vào cùng thư mục audioverse_batch này."
+        echo "Sau khi cài, ĐÓNG và MỞ LẠI terminal để PATH được refresh."
+        return
+    fi
     nohup cloudflared tunnel --url http://localhost:3000 > "$BATCH_DIR/tunnel.log" 2>&1 &
     sleep 5
     URL=$(grep -o "https://[a-zA-Z0-9.-]*\.trycloudflare\.com" "$BATCH_DIR/tunnel.log" | head -1)
