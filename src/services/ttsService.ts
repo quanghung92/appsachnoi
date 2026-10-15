@@ -5,6 +5,7 @@ import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, NativeModules } from 'react-native';
 import { VoiceOption } from '../types';
+import { fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 /** Thư mục cache audio TTS trên máy (giữ lại giữa các lần nghe để nghe lại offline, không tốn server). */
 const AUDIO_CACHE_SUBDIR = 'tts-audio-cache/';
@@ -70,6 +71,9 @@ const estimateMs = (text: string, speed: number): number => {
   return Math.max((words / ((140 / 60) * speed)) * 1000, 800);
 };
 
+/** IP mặc định của máy chạy server trong mạng LAN nhà (fallback cuối cùng).
+ *  App ưu tiên: URL thủ công > URL từ Gist (tunnel) > các IP LAN thử tự động > IP này.
+ *  Nếu đổi mạng, đặt lại qua UI hoặc đảm bảo Gist có URL tunnel mới. */
 export const LOCAL_SERVER_IP = '192.168.110.172';
 export const LOCAL_SERVER_PORT = 3000;
 export const LOCAL_SERVER_URL = `http://${LOCAL_SERVER_IP}:${LOCAL_SERVER_PORT}`;
@@ -182,13 +186,11 @@ class TTSService {
   public async getTunnelMachinesFromGist(): Promise<Array<{name: string; url: string; updated_at: string}>> {
     if (!TUNNEL_GIST_ID) return [];
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `https://api.github.com/gists/${TUNNEL_GIST_ID}`,
-        { signal: controller.signal, headers: { Accept: 'application/vnd.github+json' } }
+        { headers: { Accept: 'application/vnd.github+json' } },
+        5000
       );
-      clearTimeout(timeoutId);
       if (!res.ok) return [];
       const gist = await res.json();
       const file = gist?.files?.['audioverse-tunnel.json'];
@@ -261,6 +263,7 @@ class TTSService {
         await setAudioModeAsync({
           playsInSilentMode: true,
           shouldPlayInBackground: true,
+          interruptionMode: 'doNotMix',
         });
       }
     } catch (e) {
@@ -361,10 +364,7 @@ class TTSService {
     // 1. Nếu đã đặt URL tùy chỉnh thủ công:
     if (this.serverBaseUrl) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-        const res = await fetch(`${this.serverBaseUrl}/health`, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        const res = await fetchWithTimeout(`${this.serverBaseUrl}/health`, {}, 4000);
         if (res.ok) {
           const data = await res.json();
           return {
@@ -390,11 +390,8 @@ class TTSService {
     for (const endpoint of uniqueEndpoints) {
       try {
         const url = `${endpoint}/health`;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2500);
 
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        const res = await fetchWithTimeout(url, {}, 2500);
 
         if (res.ok) {
           const data = await res.json();
@@ -840,7 +837,7 @@ class TTSService {
 
     try {
       if (setAudioModeAsync) {
-        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true });
+        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
       }
       this.activePlayer = createAudioPlayer(localUri, { updateInterval: 500 });
       if (!this.activePlayer) {
@@ -1198,7 +1195,7 @@ class TTSService {
 
     try {
       if (setAudioModeAsync) {
-        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true });
+        await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' });
       }
 
       const currentSlot = this.activeSlot;
@@ -1690,24 +1687,23 @@ class TTSService {
     console.log(`[TTS Stream] Khởi tạo phiên Live Stream tại ${base}/api/stream/start...`);
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000);
-
-      const res = await fetch(`${base}/api/stream/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          book_id: params.bookId,
-          chapter_id: params.chapterId,
-          text: params.text,
-          url: params.url || '',
-          voice: voiceId,
-          speed: speed,
-          start_chunk_index: startIdx,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      const res = await fetchWithTimeout(
+        `${base}/api/stream/start`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            book_id: params.bookId,
+            chapter_id: params.chapterId,
+            text: params.text,
+            url: params.url || '',
+            voice: voiceId,
+            speed: speed,
+            start_chunk_index: startIdx,
+          }),
+        },
+        25000
+      );
 
       if (res.ok) {
         const data = await res.json();
@@ -1801,10 +1797,7 @@ class TTSService {
   public async checkServerHealth(): Promise<boolean> {
     try {
       const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${base}/health`, { signal: controller.signal });
-      clearTimeout(tid);
+      const res = await fetchWithTimeout(`${base}/health`, {}, 5000);
       return res.ok;
     } catch {
       return false;
