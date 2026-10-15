@@ -46,6 +46,10 @@ is_pid_running() {
 }
 
 is_stream_running() {
+    # Ưu tiên kiểm tra port thật: PID còn sống nhưng không nghe port = đã chết
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -m 2 http://127.0.0.1:3000/health >/dev/null 2>&1 && return 0
+    fi
     if command -v pgrep >/dev/null 2>&1; then
         pgrep -f "server_streaming.py" > /dev/null 2>&1 && return 0
     fi
@@ -53,9 +57,6 @@ is_stream_running() {
         local spid
         spid=$(cat "$STREAM_PID_FILE" 2>/dev/null)
         if is_pid_running "$spid"; then return 0; fi
-    fi
-    if command -v curl >/dev/null 2>&1; then
-        curl -s -m 1 http://127.0.0.1:3000/docs >/dev/null 2>&1 && return 0
     fi
     return 1
 }
