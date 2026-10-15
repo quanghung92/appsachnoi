@@ -126,6 +126,74 @@ get_cloudflared_bin() {
     fi
 }
 
+# Đẩy URL tunnel lên GitHub Gist để app tự lấy (không cần dán tay).
+# Cần 2 env var: GITHUB_TOKEN (scope: gist), GIST_ID.
+# Mỗi máy ghi entry riêng theo MACHINE_NAME (mặc định: hostname) nên không đè nhau.
+# App hiện danh sách máy cho người dùng chọn.
+update_tunnel_gist() {
+    local tunnel_url="$1"
+    [ -z "$tunnel_url" ] && return 1
+    if [ -z "$GITHUB_TOKEN" ] || [ -z "$GIST_ID" ]; then
+        echo "  (Bỏ qua cập nhật gist: chưa đặt GITHUB_TOKEN/GIST_ID)"
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "  (Bỏ qua cập nhật gist: thiếu python3)"
+        return 1
+    fi
+    local machine="${MACHINE_NAME:-$(hostname 2>/dev/null || echo unknown)}"
+    local now
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
+
+    # Dùng python để GET gist hiện tại, merge entry của máy này, rồi PATCH
+    local http_code
+    http_code=$(GITHUB_TOKEN="$GITHUB_TOKEN" GIST_ID="$GIST_ID" TUNNEL_URL="$tunnel_url" MACHINE="$machine" NOW="$now" python3 - <<'PYEOF' 2>/dev/null
+import json, os, urllib.request
+
+token = os.environ["GITHUB_TOKEN"]
+gist_id = os.environ["GIST_ID"]
+url = os.environ["TUNNEL_URL"]
+machine = os.environ["MACHINE"]
+now = os.environ["NOW"]
+api = f"https://api.github.com/gists/{gist_id}"
+headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+
+# GET nội dung hiện tại
+req = urllib.request.Request(api, headers=headers)
+with urllib.request.urlopen(req, timeout=15) as r:
+    gist = json.load(r)
+content = gist.get("files", {}).get("audioverse-tunnel.json", {}).get("content", "{}")
+try:
+    data = json.loads(content)
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+# Hỗ trợ format cũ (1 URL duy nhất) -> chuyển sang format machines
+if "url" in data and "machines" not in data:
+    data = {"machines": {"legacy": {"url": data["url"], "updated_at": data.get("updated_at", now)}}}}
+machines = data.get("machines", {})
+if not isinstance(machines, dict):
+    machines = {}
+machines[machine] = {"url": url, "updated_at": now}
+data["machines"] = machines
+
+# PATCH
+payload = json.dumps({"files": {"audioverse-tunnel.json": {"content": json.dumps(data)}}}).encode()
+req = urllib.request.Request(api, data=payload, headers=headers, method="PATCH")
+with urllib.request.urlopen(req, timeout=15) as r:
+    print(r.status)
+PYEOF
+)
+    if [ "$http_code" = "200" ]; then
+        echo "  ✓ Đã cập nhật gist (máy: $machine)"
+        return 0
+    else
+        echo "  ✗ Cập nhật gist thất bại (HTTP $http_code)"
+        return 1
+    fi
+}
+
 start_tunnel() {
     if is_tunnel_running; then echo "Tunnel đang chạy rồi."; return; fi
     local cf_bin
@@ -144,7 +212,7 @@ start_tunnel() {
     if [ -n "$URL" ]; then
         echo "✓ Tunnel đã chạy! (PID: $pid)"
         echo "  URL: $URL"
-        echo "  Dán URL này vào app iPhone."
+        update_tunnel_gist "$URL"
     else
         echo "Tunnel đang khởi động, xem URL trong tunnel.log sau vài giây."
     fi
@@ -226,9 +294,10 @@ while true; do
     echo "  7. Kéo code mới từ GitHub"
     echo "  8. Xem log streaming server"
     echo "  9. Đẩy chương đã stream xong lên Google Drive"
+    echo "  10. Cập nhật URL tunnel lên Gist (cho app tự lấy)"
     echo "  0. Thoát"
     echo ""
-    read -p "Chọn [0-9]: " choice
+    read -p "Chọn [0-10]: " choice
     echo ""
     case $choice in
         1) start_stream ;;
@@ -240,6 +309,15 @@ while true; do
         7) pull_latest ;;
         8) tail -50 "$STREAM_LOG" 2>/dev/null || echo "Chưa có log." ;;
         9) upload_to_drive ;;
+        10)
+            CUR_URL=$(grep -o "https://[a-zA-Z0-9.-]*\.trycloudflare\.com" "$BATCH_DIR/tunnel.log" 2>/dev/null | head -1)
+            if [ -n "$CUR_URL" ]; then
+                echo "URL hiện tại: $CUR_URL"
+                update_tunnel_gist "$CUR_URL"
+            else
+                echo "✗ Chưa thấy URL trong tunnel.log — tunnel có đang chạy không?"
+            fi
+            ;;
         0) echo "Tạm biệt!"; exit 0 ;;
         *) echo "Lựa chọn không hợp lệ." ;;
     esac
