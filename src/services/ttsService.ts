@@ -1319,6 +1319,7 @@ class TTSService {
     this.chapterDurationMs = 0;
     this.chapterOnMsProgress = null;
     this.duckBgm(false);
+    this.clearDeviceFallback(); // dừng theo dõi auto-upgrade
 
     if (this.currentSessionId) {
       this.abortCurrentStream(this.currentSessionId).catch(() => {});
@@ -1565,6 +1566,7 @@ class TTSService {
         console.log(`[TTS Stream] Phiên tạo thành công! Session: ${data.session_id}, ${data.total_chunks} chunks.`);
         this.currentSessionId = data.session_id;
         this.isLiveStreamingMode = true;
+        this.clearDeviceFallback(); // Đã có Kokoro, hủy theo dõi upgrade
 
         if (Array.isArray(data.sentences) && data.sentences.length > 0) {
           this.sentences = data.sentences;
@@ -1592,7 +1594,17 @@ class TTSService {
     }
 
     // Fallback: Chạy chế độ speak câu đơn thông thường nếu server streaming chưa bật
+    // Đánh dấu để auto-upgrade sang Kokoro khi server có lại (BƯỚC 4)
     this.isLiveStreamingMode = false;
+    this.markDeviceFallback({
+      bookId: params.bookId,
+      chapterId: params.chapterId,
+      text: params.text,
+      url: params.url,
+      onFinish: params.onFinish,
+      onError: params.onError,
+      onSentence: params.onSentence,
+    });
     this.speak(
       params.text,
       params.onFinish,
@@ -1620,8 +1632,198 @@ class TTSService {
     } catch {}
   }
 
+  // =================================================================
+  // BƯỚC 4: AUTO-UPGRADE KOKORO — Tự động chuyển từ giọng máy sang Kokoro
+  // khi server có lại. Chạy kiểm tra nền mỗi 30s trong lúc fallback.
+  // =================================================================
+
+  private isDeviceFallbackMode = false;
+  private fallbackInfo: {
+    bookId: string; chapterId: string; text: string; url?: string;
+    onFinish?: () => void; onError?: (e: any) => void; onSentence?: SentenceListener;
+  } | null = null;
+  private upgradeCheckTimer: any = null;
+
+  /** Kiểm tra server Kokoro có phản hồi không (nhanh, timeout 5s). */
+  public async checkServerHealth(): Promise<boolean> {
+    try {
+      const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(`${base}/health`, { signal: controller.signal });
+      clearTimeout(tid);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Bắt đầu theo dõi để auto-upgrade khi server có lại. */
+  private startUpgradeWatcher() {
+    this.stopUpgradeWatcher();
+    this.upgradeCheckTimer = setInterval(async () => {
+      if (!this.isDeviceFallbackMode || !this.isSpeaking || this.isPaused) return;
+      const healthy = await this.checkServerHealth();
+      if (healthy && this.fallbackInfo) {
+        console.log('[TTS Auto-Upgrade] Server Kokoro đã có lại, chuyển sang giọng AI...');
+        const info = this.fallbackInfo;
+        this.stopUpgradeWatcher();
+        this.isDeviceFallbackMode = false;
+        this.fallbackInfo = null;
+        // Chuyển sang stream Kokoro từ câu hiện tại
+        await this.streamChapter({
+          bookId: info.bookId,
+          chapterId: info.chapterId,
+          text: info.text,
+          url: info.url,
+          startSentenceIndex: this.sentenceIndex,
+          onFinish: info.onFinish,
+          onError: info.onError,
+          onSentence: info.onSentence,
+        });
+      }
+    }, 30000); // kiểm tra mỗi 30 giây
+  }
+
+  private stopUpgradeWatcher() {
+    if (this.upgradeCheckTimer) {
+      clearInterval(this.upgradeCheckTimer);
+      this.upgradeCheckTimer = null;
+    }
+  }
+
+  /**
+   * Đánh dấu đang ở chế độ fallback giọng máy (để auto-upgrade sau).
+   * Gọi trước khi playViaDeviceSpeech.
+   */
+  public markDeviceFallback(info: {
+    bookId: string; chapterId: string; text: string; url?: string;
+    onFinish?: () => void; onError?: (e: any) => void; onSentence?: SentenceListener;
+  }) {
+    this.isDeviceFallbackMode = true;
+    this.fallbackInfo = info;
+    this.startUpgradeWatcher();
+  }
+
+  /** Hủy chế độ fallback (khi đã có Kokoro hoặc dừng hẳn). */
+  public clearDeviceFallback() {
+    this.isDeviceFallbackMode = false;
+    this.fallbackInfo = null;
+    this.stopUpgradeWatcher();
+  }
+
   public getIsSpeaking(): boolean {
     return this.isSpeaking;
+  }
+
+  // =================================================================
+  // BƯỚC 4: OFFLINE DOWNLOAD — Tải nguyên chương về máy để nghe offline
+  // =================================================================
+
+  /** Thư mục lưu chương tải offline (riêng với cache tạm, không bị xóa LRU). */
+  private offlineDir(): string {
+    return `${(FileSystem.documentDirectory as string) || ''}audioverse-offline/`;
+  }
+
+  private offlineKey(bookId: string, chapterId: string): string {
+    return `@audioverse/offline/${bookId}/${chapterId}`;
+  }
+
+  private offlineFilePath(bookId: string, chapterId: string): string {
+    const safe = `${bookId}_${chapterId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${this.offlineDir()}${safe}.mp3`;
+  }
+
+  /** Kiểm tra chương đã được tải offline chưa. */
+  public async isChapterDownloaded(bookId: string, chapterId: string): Promise<boolean> {
+    try {
+      const uri = await AsyncStorage.getItem(this.offlineKey(bookId, chapterId));
+      if (!uri) return false;
+      const info: any = await FileSystem.getInfoAsync(uri).catch(() => null);
+      return !!(info && info.exists && info.size > 1024);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Lấy URI file offline của chương (null nếu chưa tải). */
+  public async getOfflineChapterUri(bookId: string, chapterId: string): Promise<string | null> {
+    const ok = await this.isChapterDownloaded(bookId, chapterId);
+    if (!ok) return null;
+    return AsyncStorage.getItem(this.offlineKey(bookId, chapterId));
+  }
+
+  /** Xóa file offline của chương. */
+  public async deleteOfflineChapter(bookId: string, chapterId: string): Promise<void> {
+    try {
+      const uri = await AsyncStorage.getItem(this.offlineKey(bookId, chapterId));
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+      await AsyncStorage.removeItem(this.offlineKey(bookId, chapterId));
+    } catch {}
+  }
+
+  /**
+   * Tải nguyên chương về máy để nghe offline.
+   * Ưu tiên: 1) Drive MP3 (nếu có) -> 2) Server stitch full_chapter.mp3
+   * onProgress(loadedBytes, totalBytes): cập nhật tiến trình tải.
+   */
+  public async downloadChapterForOffline(
+    bookId: string,
+    chapterId: string,
+    driveUrl?: string,
+    onProgress?: (loaded: number, total: number) => void
+  ): Promise<string | null> {
+    try {
+      // Tạo thư mục offline
+      await FileSystem.makeDirectoryAsync(this.offlineDir(), { intermediates: true }).catch(() => {});
+
+      // Xác định URL tải: ưu tiên Drive, fallback server download_full
+      let url = driveUrl;
+      if (!url) {
+        const base = this.serverBaseUrl || `http://${this.serverIp}:${this.serverPort}`;
+        url = `${base}/api/stream/download_full?book_id=${encodeURIComponent(bookId)}&chapter_id=${encodeURIComponent(chapterId)}`;
+      }
+
+      const destPath = this.offlineFilePath(bookId, chapterId);
+      const tmpPath = `${destPath}.tmp`;
+
+      const dl = FileSystem.createDownloadResumable(
+        url,
+        tmpPath,
+        {},
+        (progress) => {
+          if (onProgress) {
+            onProgress(
+              progress.totalBytesWritten,
+              progress.totalBytesExpectedToWrite || 0
+            );
+          }
+        }
+      );
+      const result = await dl.downloadAsync();
+      if (!result || result.status !== 200) {
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
+        return null;
+      }
+
+      // Kiểm tra file hợp lệ
+      const info: any = await FileSystem.getInfoAsync(tmpPath).catch(() => null);
+      if (!info || !info.exists || (info.size || 0) < 1024) {
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true }).catch(() => {});
+        return null;
+      }
+
+      // Chuyển vào vị trí chính thức
+      await FileSystem.moveAsync({ from: tmpPath, to: destPath }).catch(async () => {
+        await FileSystem.deleteAsync(destPath, { idempotent: true }).catch(() => {});
+        await FileSystem.moveAsync({ from: tmpPath, to: destPath });
+      });
+      await AsyncStorage.setItem(this.offlineKey(bookId, chapterId), destPath);
+      return destPath;
+    } catch (err) {
+      console.warn('[TTS Offline] Lỗi tải chương:', err);
+      return null;
+    }
   }
 }
 
