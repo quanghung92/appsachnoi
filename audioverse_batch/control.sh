@@ -152,51 +152,62 @@ update_tunnel_gist() {
     local now
     now=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
 
-    # Dùng python để GET gist hiện tại, merge entry của máy này, rồi PATCH
-    local http_code
-    http_code=$(GITHUB_TOKEN="$GITHUB_TOKEN" GIST_ID="$GIST_ID" TUNNEL_URL="$tunnel_url" MACHINE="$machine" NOW="$now" python3 - <<'PYEOF' 2>/dev/null
-import json, os, urllib.request
+    # Ghi script python ra file tạm (heredoc không ổn định trên Git Bash Windows)
+    local py_tmp
+    py_tmp=$(mktemp 2>/dev/null || echo "$BATCH_DIR/.gist_update_tmp.py")
+    cat > "$py_tmp" <<'PYEOF'
+import json, os, sys, urllib.request, urllib.error
 
-token = os.environ["GITHUB_TOKEN"]
-gist_id = os.environ["GIST_ID"]
-url = os.environ["TUNNEL_URL"]
-machine = os.environ["MACHINE"]
-now = os.environ["NOW"]
+token = os.environ.get("GITHUB_TOKEN", "")
+gist_id = os.environ.get("GIST_ID", "")
+url = os.environ.get("TUNNEL_URL", "")
+machine = os.environ.get("MACHINE", "unknown")
+now = os.environ.get("NOW", "")
 api = f"https://api.github.com/gists/{gist_id}"
-headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+           "User-Agent": "AudioVerse-control.sh"}
 
-# GET nội dung hiện tại
-req = urllib.request.Request(api, headers=headers)
-with urllib.request.urlopen(req, timeout=15) as r:
-    gist = json.load(r)
-content = gist.get("files", {}).get("audioverse-tunnel.json", {}).get("content", "{}")
 try:
-    data = json.loads(content)
-except Exception:
-    data = {}
-if not isinstance(data, dict):
-    data = {}
-# Hỗ trợ format cũ (1 URL duy nhất) -> chuyển sang format machines
-if "url" in data and "machines" not in data:
-    data = {"machines": {"legacy": {"url": data["url"], "updated_at": data.get("updated_at", now)}}}}
-machines = data.get("machines", {})
-if not isinstance(machines, dict):
-    machines = {}
-machines[machine] = {"url": url, "updated_at": now}
-data["machines"] = machines
+    req = urllib.request.Request(api, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as r:
+        gist = json.load(r)
+    content = gist.get("files", {}).get("audioverse-tunnel.json", {}).get("content", "{}")
+    try:
+        data = json.loads(content)
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if "url" in data and "machines" not in data:
+        data = {"machines": {"legacy": {"url": data["url"], "updated_at": data.get("updated_at", now)}}}
+    machines = data.get("machines", {})
+    if not isinstance(machines, dict):
+        machines = {}
+    machines[machine] = {"url": url, "updated_at": now}
+    data["machines"] = machines
 
-# PATCH
-payload = json.dumps({"files": {"audioverse-tunnel.json": {"content": json.dumps(data)}}}).encode()
-req = urllib.request.Request(api, data=payload, headers=headers, method="PATCH")
-with urllib.request.urlopen(req, timeout=15) as r:
-    print(r.status)
+    payload = json.dumps({"files": {"audioverse-tunnel.json": {"content": json.dumps(data)}}}).encode()
+    req = urllib.request.Request(api, data=payload, headers=headers, method="PATCH")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        print(r.status)
+except urllib.error.HTTPError as e:
+    print(f"HTTP_ERROR:{e.code}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"ERROR:{e}", file=sys.stderr)
+    sys.exit(1)
 PYEOF
-)
-    if [ "$http_code" = "200" ]; then
+
+    local result
+    result=$(GITHUB_TOKEN="$GITHUB_TOKEN" GIST_ID="$GIST_ID" TUNNEL_URL="$tunnel_url" MACHINE="$machine" NOW="$now" python3 "$py_tmp" 2>&1)
+    local py_exit=$?
+    rm -f "$py_tmp"
+
+    if [ $py_exit -eq 0 ] && [ "$result" = "200" ]; then
         echo "  ✓ Đã cập nhật gist (máy: $machine)"
         return 0
     else
-        echo "  ✗ Cập nhật gist thất bại (HTTP $http_code)"
+        echo "  ✗ Cập nhật gist thất bại: $result"
         return 1
     fi
 }
