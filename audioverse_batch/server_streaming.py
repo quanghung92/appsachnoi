@@ -100,6 +100,8 @@ async def lifespan(app: FastAPI):
 
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, _warmup)
+    # 5. Tự động đẩy chương stream xong lên Google Drive (mỗi 30 phút, nếu có credentials)
+    asyncio.create_task(auto_upload_drive_worker())
     yield
 
 # Khởi tạo FastAPI với lifespan
@@ -432,6 +434,126 @@ async def synthesize_chunk_coalesced(book_id: str, chapter_id: str, chunk_idx: i
         raise e
     finally:
         _in_flight_tasks.pop(task_key, None)
+
+
+# ----------------------------------------------------------------
+# BACKGROUND WORKER: AUTO-UPLOAD DRIVE (BƯỚC 4)
+# Tự động đẩy full_chapter.mp3 đã stream xong lên Google Drive mỗi 30 phút.
+# Chỉ chạy khi có đủ env var: GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN.
+# ----------------------------------------------------------------
+
+def _drive_credentials_ok() -> bool:
+    return all([
+        os.environ.get("GOOGLE_CLIENT_ID"),
+        os.environ.get("GOOGLE_CLIENT_SECRET"),
+        os.environ.get("GOOGLE_REFRESH_TOKEN"),
+    ])
+
+
+def _do_drive_upload() -> int:
+    """Quét và upload các chương hoàn thành. Trả về số chương đã upload. Chạy trong executor."""
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+    except ImportError as e:
+        print(f"[Drive Upload] Thiếu thư viện: {e}")
+        return 0
+
+    creds = Credentials(
+        None,
+        refresh_token=os.environ["GOOGLE_REFRESH_TOKEN"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=os.environ["GOOGLE_CLIENT_ID"],
+        client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+        scopes=["https://www.googleapis.com/auth/drive.file"],
+    )
+    svc = build("drive", "v3", credentials=creds)
+
+    # Tìm/tạo folder AudioVerse
+    q = ("name='AudioVerse' and mimeType='application/vnd.google-apps.folder' "
+         "and trashed=false")
+    res = svc.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    files = res.get("files", [])
+    if files:
+        folder_id = files[0]["id"]
+    else:
+        meta = {"name": "AudioVerse", "mimeType": "application/vnd.google-apps.folder"}
+        folder_id = svc.files().create(body=meta, fields="id").execute()["id"]
+
+    # Load index
+    index_data = {}
+    if INDEX_PATH.exists():
+        try:
+            index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    uploaded = 0
+    if not CACHE_DIR.exists():
+        return 0
+    for book_dir in CACHE_DIR.iterdir():
+        if not book_dir.is_dir():
+            continue
+        for chap_dir in book_dir.iterdir():
+            if not chap_dir.is_dir():
+                continue
+            manifest_path = chap_dir / "manifest.json"
+            full_mp3 = chap_dir / "full_chapter.mp3"
+            if not manifest_path.exists() or not full_mp3.exists():
+                continue
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not manifest.get("is_complete") or manifest.get("drive_file_id"):
+                continue
+            mp3_bytes = full_mp3.read_bytes()
+            if len(mp3_bytes) < 1024:
+                continue
+            book_id, chapter_id = book_dir.name, chap_dir.name
+            key = f"{book_id}/{chapter_id}"
+            filename = f"{book_id}__{chapter_id}.mp3"
+            try:
+                media = MediaIoBaseUpload(io.BytesIO(mp3_bytes), mimetype="audio/mpeg", resumable=True)
+                meta = {"name": filename, "parents": [folder_id], "mimeType": "audio/mpeg"}
+                file_id = svc.files().create(body=meta, media_body=media, fields="id").execute()["id"]
+                svc.permissions().create(
+                    fileId=file_id, body={"type": "anyone", "role": "reader"}
+                ).execute()
+                index_data[key] = {
+                    "drive_file_id": file_id,
+                    "download_url": f"https://drive.google.com/uc?export=download&id={file_id}",
+                    "engine": "kokoro", "voice": "duc_an",
+                    "book_id": book_id, "chapter_id": chapter_id,
+                }
+                manifest["drive_file_id"] = file_id
+                manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                uploaded += 1
+                print(f"[Drive Upload] ✓ {key} -> {file_id}")
+            except Exception as e:
+                print(f"[Drive Upload] ✗ {key}: {e}")
+
+    if uploaded > 0:
+        INDEX_PATH.write_text(json.dumps(index_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return uploaded
+
+
+async def auto_upload_drive_worker():
+    """Worker nền: mỗi 30 phút quét và đẩy chương hoàn thành lên Drive."""
+    # Đợi server khởi động xong
+    await asyncio.sleep(60)
+    while True:
+        try:
+            # Không upload khi đang có người stream (nhường CPU/băng thông)
+            if _drive_credentials_ok() and not is_stream_active():
+                loop = asyncio.get_running_loop()
+                n = await loop.run_in_executor(None, _do_drive_upload)
+                if n > 0:
+                    print(f"[Drive Upload] Hoàn thành: {n} chương đã lên Drive.")
+        except Exception as e:
+            print(f"[Drive Upload Worker Error] {e}")
+        await asyncio.sleep(1800)  # 30 phút
 
 
 # ----------------------------------------------------------------
