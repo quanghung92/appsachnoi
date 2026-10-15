@@ -838,9 +838,15 @@ def api_crawl_chapter_titles(
             items_to_fetch.append((u, num))
 
     results = []
-    max_workers = min(15, max(1, len(items_to_fetch)))
+    max_workers = min(3, max(1, len(items_to_fetch)))
+
+    def _worker(target_url: str, chap_num: int, delay_sec: float):
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+        return fetch_single_chapter_title(target_url, chap_num)
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(fetch_single_chapter_title, u, num) for u, num in items_to_fetch]
+        futures = [executor.submit(_worker, u, num, idx * 0.12) for idx, (u, num) in enumerate(items_to_fetch)]
         for f in futures:
             try:
                 results.append(f.result())
