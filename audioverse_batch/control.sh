@@ -144,8 +144,8 @@ update_tunnel_gist() {
         echo "  (Bỏ qua cập nhật gist: chưa đặt GITHUB_TOKEN/GIST_ID)"
         return 1
     fi
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "  (Bỏ qua cập nhật gist: thiếu python3)"
+    if ! "$VENV_PY" --version >/dev/null 2>&1; then
+        echo "  (Bỏ qua cập nhật gist: không tìm thấy Python)"
         return 1
     fi
     local machine="${MACHINE_NAME:-$(hostname 2>/dev/null || echo unknown)}"
@@ -199,7 +199,7 @@ except Exception as e:
 PYEOF
 
     local result
-    result=$(GITHUB_TOKEN="$GITHUB_TOKEN" GIST_ID="$GIST_ID" TUNNEL_URL="$tunnel_url" MACHINE="$machine" NOW="$now" python3 "$py_tmp" 2>&1)
+    result=$(GITHUB_TOKEN="$GITHUB_TOKEN" GIST_ID="$GIST_ID" TUNNEL_URL="$tunnel_url" MACHINE="$machine" NOW="$now" "$VENV_PY" "$py_tmp" 2>&1)
     local py_exit=$?
     rm -f "$py_tmp"
 
