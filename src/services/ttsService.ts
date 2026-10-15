@@ -75,6 +75,10 @@ export const LOCAL_SERVER_PORT = 3000;
 export const LOCAL_SERVER_URL = `http://${LOCAL_SERVER_IP}:${LOCAL_SERVER_PORT}`;
 export const DEFAULT_TUNNEL_URL = 'https://nasty-wings-unite.loca.lt';
 
+// GitHub Gist chứa URL tunnel mới nhất (do control.sh tự cập nhật).
+// Để trống thì app bỏ qua bước này.
+export const TUNNEL_GIST_ID = '8e0af2e9e8b496fca8a8b052267fd38e';
+
 // Presets nhạc nền thư giãn (nhẹ nhàng, lặp mượt mà)
 export const DEFAULT_BGM_URL = 'https://actions.google.com/sounds/v1/ambiences/rain_heavy.ogg';
 export const BGM_TRACKS = [
@@ -163,6 +167,89 @@ class TTSService {
         this.serverBaseUrl = null;
       }
     } catch {}
+    // Thử lấy URL tunnel mới nhất từ Gist (không ghi đè URL người dùng đặt tay)
+    this.refreshTunnelUrlFromGist().catch(() => {});
+  }
+
+  /**
+   * Lấy danh sách máy có tunnel từ GitHub Gist.
+   * Mỗi máy tự ghi entry riêng nên không đè nhau.
+   * Trả về mảng {name, url, updated_at} sắp xếp theo updated_at mới nhất trước.
+   */
+  public async getTunnelMachinesFromGist(): Promise<Array<{name: string; url: string; updated_at: string}>> {
+    if (!TUNNEL_GIST_ID) return [];
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(
+        `https://api.github.com/gists/${TUNNEL_GIST_ID}`,
+        { signal: controller.signal, headers: { Accept: 'application/vnd.github+json' } }
+      );
+      clearTimeout(timeoutId);
+      if (!res.ok) return [];
+      const gist = await res.json();
+      const file = gist?.files?.['audioverse-tunnel.json'];
+      if (!file?.content) return [];
+      const data = JSON.parse(file.content);
+      const machines = data?.machines;
+      if (!machines || typeof machines !== 'object') {
+        // Hỗ trợ format cũ (1 URL duy nhất)
+        const url = (data?.url || '').trim().replace(/\/+$/, '');
+        if (/^https?:\/\//.test(url)) {
+          return [{ name: data?.source || 'máy', url, updated_at: data?.updated_at || '' }];
+        }
+        return [];
+      }
+      return Object.entries(machines)
+        .map(([name, info]: [string, any]) => ({
+          name,
+          url: (info?.url || '').trim().replace(/\/+$/, ''),
+          updated_at: info?.updated_at || '',
+        }))
+        .filter(m => /^https?:\/\//.test(m.url))
+        .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Chọn 1 máy từ gist làm server (người dùng bấm chọn trong UI).
+   */
+  public async selectTunnelMachine(name: string, url: string): Promise<void> {
+    const clean = url.trim().replace(/\/+$/, '');
+    this.serverBaseUrl = clean;
+    try {
+      await AsyncStorage.setItem('@audioverse/server_type', 'tunnel');
+      await AsyncStorage.setItem('@audioverse/server_url', clean);
+      await AsyncStorage.setItem('@audioverse/tunnel_machine', name);
+    } catch {}
+  }
+
+  /**
+   * Lấy URL tunnel mới nhất từ GitHub Gist (tự động khi mở app).
+   * Chỉ áp dụng khi người dùng chưa đặt URL thủ công (server_type != 'custom').
+   * Nếu có nhiều máy, ưu tiên máy đã chọn trước đó, rồi đến máy mới nhất.
+   */
+  public async refreshTunnelUrlFromGist(): Promise<string | null> {
+    try {
+      const savedType = await AsyncStorage.getItem('@audioverse/server_type');
+      if (savedType === 'custom') return null; // tôn trọng URL người dùng đặt tay
+      const machines = await this.getTunnelMachinesFromGist();
+      if (machines.length === 0) return null;
+      const savedMachine = await AsyncStorage.getItem('@audioverse/tunnel_machine').catch(() => null);
+      const picked = machines.find(m => m.name === savedMachine) || machines[0];
+      if (picked.url !== this.serverBaseUrl) {
+        this.serverBaseUrl = picked.url;
+        AsyncStorage.setItem('@audioverse/server_type', 'tunnel').catch(() => {});
+        AsyncStorage.setItem('@audioverse/server_url', picked.url).catch(() => {});
+        AsyncStorage.setItem('@audioverse/tunnel_machine', picked.name).catch(() => {});
+        console.log(`[TTS] Tunnel URL từ gist (${picked.name}): ${picked.url}`);
+      }
+      return picked.url;
+    } catch {
+      return null;
+    }
   }
 
   private async initAudioMode() {
@@ -265,6 +352,9 @@ class TTSService {
   }
 
   public async testServerConnection(): Promise<{ success: boolean; ip: string; message: string }> {
+    // 0. Refresh URL tunnel từ gist trước (nếu có cấu hình)
+    await this.refreshTunnelUrlFromGist().catch(() => {});
+
     // 1. Nếu đã đặt URL tùy chỉnh thủ công:
     if (this.serverBaseUrl) {
       try {
