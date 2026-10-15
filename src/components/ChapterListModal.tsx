@@ -53,10 +53,10 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
 
   // Phân tích từ khóa tìm kiếm: tách số chương nếu có
   const { searchedChapterNum, filteredChapters } = useMemo(() => {
-    if (!book) return { searchedChapterNum: null, filteredChapters: [] };
+    if (!book) return { searchedChapterNum: null as number | null, filteredChapters: [] as Chapter[] };
     const trimmed = searchText.trim().toLowerCase();
     if (!trimmed) {
-      return { searchedChapterNum: null, filteredChapters: book.chapters };
+      return { searchedChapterNum: null as number | null, filteredChapters: book.chapters };
     }
 
     const matchNum = trimmed.match(/(?:chương|chuong|c)?\s*(\d+)/i);
@@ -71,11 +71,10 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
     return { searchedChapterNum: parsedNum, filteredChapters: filtered };
   }, [book, searchText]);
 
-  if (!book) return null;
-
   const isCurrentLoading = isFetchingRange || localFetching;
 
   // Tự động nạp tiêu đề thật từ web truyện nếu các chương đang hiển thị chưa có tên chi tiết
+  // (đặt trước `if (!book) return null` để tuân thủ Rules of Hooks)
   React.useEffect(() => {
     if (!visible || !book || book.type !== 'web_novel' || !book.sourceUrl || !onFetchChapterRange || isCurrentLoading) return;
     const isGeneric = (t?: string) => !t || /^Chương\s+\d+[:\s\-–—]*$/i.test(t.trim());
@@ -86,6 +85,8 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
       onFetchChapterRange(Math.max(1, firstGeneric.chapterNumber), 30).catch(() => {});
     }
   }, [visible, book?.id, currentChapter?.id, isCurrentLoading]);
+
+  if (!book) return null;
 
   const handleTriggerFetchRange = async (num: number) => {
     if (!onFetchChapterRange || isCurrentLoading) return;
@@ -228,7 +229,7 @@ export const ChapterListModal: React.FC<ChapterListModalProps> = ({
                           <Text style={styles.durationText}>{item.duration}</Text>
                         )}
                         {hasAudio && (
-                          <Text style={styles.audioReadyText}>✓ Có audio giọng Gemini</Text>
+                          <Text style={styles.audioReadyText}>✓ Có audio giọng Kokoro</Text>
                         )}
                         {isPending && (
                           <Text style={styles.audioPendingText}>⏳ Đang chờ gen audio</Text>
