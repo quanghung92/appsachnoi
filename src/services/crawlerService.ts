@@ -71,12 +71,29 @@ export class CrawlerService {
           .trim();
       }
       if (content.length > 150) {
+        let chapterTitle = 'Chương mới';
+        const titleMatch = html.match(/<(?:h1|h2|a|span)[^>]*(?:class|id)=["'][^"']*(?:chapter-title|title-chap)[^"']*["'][^>]*>([\s\S]*?)<\/(?:h1|h2|a|span)>/i);
+        if (titleMatch && titleMatch[1]) {
+          chapterTitle = titleMatch[1].replace(/<[^>]+>/g, '').trim();
+        } else {
+          const docTitle = html.match(/<title>([\s\S]*?)<\/title>/i);
+          if (docTitle && docTitle[1]) {
+            chapterTitle = docTitle[1].split('-')[0].split('|')[0].trim();
+          }
+        }
+
+        let chapterNumber = 1;
+        const numMatch = url.match(/chuong-(\d+)/i);
+        if (numMatch && numMatch[1]) {
+          chapterNumber = parseInt(numMatch[1], 10);
+        }
+
         return {
           status: 'ok',
           url,
           story_title: 'Truyện Web',
-          chapter_title: 'Chương mới',
-          chapter_number: 1,
+          chapter_title: chapterTitle || `Chương ${chapterNumber}`,
+          chapter_number: chapterNumber,
           author: 'Tác giả Online',
           content,
           content_length: content.length,
@@ -112,6 +129,117 @@ export class CrawlerService {
 
     // 2. Thử cào trực tiếp từ app nếu server không phản hồi
     return await this.crawlDirect(trimmed);
+  }
+
+  /**
+   * Cào hàng loạt tiêu đề chương (Title Crawling) nhanh chóng qua server streaming
+   * hoặc fallback sang tạo cấu trúc chương chuẩn.
+   */
+  public async crawlChapterTitles(
+    book: Book,
+    startNum: number,
+    count: number
+  ): Promise<Chapter[]> {
+    const chapters: Chapter[] = [];
+    const prefix = book.id.replace(/[^a-zA-Z0-9]/g, '_');
+    const sourceUrl = book.sourceUrl || '';
+
+    // 1. Thử gọi API cào song song tiêu đề từ server
+    if (sourceUrl) {
+      try {
+        const baseUrl = ttsService.getServerUrl();
+        const apiUrl = `${baseUrl}/api/crawl_chapter_titles?base_url=${encodeURIComponent(
+          sourceUrl
+        )}&start=${startNum}&count=${count}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const res = await fetch(apiUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'ok' && Array.isArray(data.results) && data.results.length > 0) {
+            for (const item of data.results) {
+              const num = item.chapter_number;
+              chapters.push({
+                id: `${prefix}_c${num}`,
+                chapterNumber: num,
+                title: item.title || `Chương ${num}`,
+                url: item.url || this.buildChapterUrl(sourceUrl, num),
+                content: `Chương ${num}: Nhấn để nạp nội dung.`,
+                duration: '10:00',
+              });
+            }
+            if (chapters.length > 0) {
+              return chapters;
+            }
+          }
+        }
+      } catch (e) {
+        console.log('[CrawlerService] crawlChapterTitles server call failed, falling back:', e);
+      }
+    }
+
+    // 2. Fallback: tự sinh cấu trúc chương nếu server chưa chạy hoặc mạng chậm
+    for (let i = startNum; i < startNum + count; i++) {
+      chapters.push({
+        id: `${prefix}_c${i}`,
+        chapterNumber: i,
+        title: `Chương ${i}`,
+        url: this.buildChapterUrl(sourceUrl, i),
+        content: `Chương ${i}: Nhấn để nạp nội dung.`,
+        duration: '10:00',
+      });
+    }
+
+    return chapters;
+  }
+
+  /**
+   * Hợp nhất danh sách chương mới vào danh sách hiện có của sách:
+   * - Giữ nguyên các chương đã có nội dung thật.
+   * - Cập nhật title mới nếu title cũ là generic ("Chương X").
+   * - Sắp xếp theo thứ tự số chương tăng dần.
+   */
+  public mergeChapters(existing: Chapter[], incoming: Chapter[]): Chapter[] {
+    const chapterMap = new Map<number, Chapter>();
+
+    for (const ch of existing) {
+      const num = ch.chapterNumber || 0;
+      chapterMap.set(num, { ...ch });
+    }
+
+    for (const inc of incoming) {
+      const num = inc.chapterNumber || 0;
+      const cleanIncTitle = (inc.title || '').replace(/[:\s\-–—]+$/, '').trim();
+      if (chapterMap.has(num)) {
+        const cur = chapterMap.get(num)!;
+        const curCleanTitle = (cur.title || '').replace(/[:\s\-–—]+$/, '').trim();
+        const isGenericTitle = !curCleanTitle || /^Chương\s+\d+[:\s\-–—]*$/i.test(cur.title?.trim() || '');
+        const hasSpecificTitle = cleanIncTitle && !/^Chương\s+\d+[:\s\-–—]*$/i.test(cleanIncTitle);
+
+        if (isGenericTitle && hasSpecificTitle) {
+          cur.title = cleanIncTitle;
+        } else if (cleanIncTitle && hasSpecificTitle && cleanIncTitle.length > (curCleanTitle.length + 3)) {
+          cur.title = cleanIncTitle;
+        } else if (cur.title) {
+          cur.title = curCleanTitle; // dọn dấu : thừa ở cuối
+        }
+
+        if (!cur.url && inc.url) {
+          cur.url = inc.url;
+        }
+      } else {
+        chapterMap.set(num, {
+          ...inc,
+          title: cleanIncTitle || inc.title,
+        });
+      }
+    }
+
+    const merged = Array.from(chapterMap.values());
+    merged.sort((a, b) => (a.chapterNumber || 0) - (b.chapterNumber || 0));
+    return merged;
   }
 
   /**

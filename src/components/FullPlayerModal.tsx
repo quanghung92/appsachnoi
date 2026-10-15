@@ -214,7 +214,15 @@ export const FullPlayerModal: React.FC<FullPlayerModalProps> = ({
             /* BƯỚC 3: Synchronized Read-Along Mode (Highlight & Auto-Scroll & Tap-to-Seek) */
             <View style={styles.readerContainer}>
               <View style={styles.readerHeader}>
-                <View style={{ flex: 1 }}>
+                <TouchableOpacity
+                  onPress={onOpenChapterList}
+                  style={styles.readerTocBtn}
+                  accessibilityLabel="Mục lục"
+                >
+                  <Ionicons name="list" size={16} color={Colors.primary} />
+                  <Text style={styles.readerTocText}>Mục lục</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, marginHorizontal: 8 }}>
                   <Text style={styles.readerTitle} numberOfLines={1}>{chapter.title}</Text>
                   <Text style={styles.readerSubtitle} numberOfLines={1}>{book.title}</Text>
                 </View>
@@ -643,6 +651,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     paddingBottom: 10,
+  },
+  readerTocBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(6, 214, 160, 0.12)',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 214, 160, 0.25)',
+  },
+  readerTocText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+    marginLeft: 4,
   },
   readerTitle: {
     fontSize: 17,

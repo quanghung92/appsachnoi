@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 # Đảm bảo đường dẫn import cho audioverse_batch
 _CURR_DIR = str(Path(__file__).resolve().parent)
@@ -360,28 +360,40 @@ def save_chunk_mp3(book_id: str, chapter_id: str, chunk_idx: int, mp3_bytes: byt
     save_manifest(book_id, chapter_id, manifest)
 
 
-async def auto_stitch_full_chapter(book_id: str, chapter_id: str, total_chunks: int):
-    """Ghép toàn bộ các chunk MP3 thành 1 file MP3 hoàn chỉnh của cả chương."""
+async def auto_stitch_full_chapter(book_id: str, chapter_id: str, total_chunks: int) -> bool:
+    """Ghép toàn bộ các chunk MP3 thành 1 file MP3 hoàn chỉnh của cả chương bằng ffmpeg concat."""
     try:
         cdir = get_chapter_cache_dir(book_id, chapter_id)
         full_mp3_path = cdir / "full_chapter.mp3"
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
 
-        # Tạo file danh sách cho ffmpeg concat
+        # Kiểm tra xem toàn bộ các chunk từ 0 đến total_chunks-1 đã có mặt chưa
+        missing = [idx for idx in range(total_chunks) if not (cdir / f"{CHUNK_PREFIX}{idx}.mp3").exists()]
+        if missing:
+            print(f"[Auto-Stitch Warning] Chưa đủ chunk để ghép cho {book_id}/{chapter_id} (thiếu {len(missing)}/{total_chunks} chunk)")
+            return False
+
+        # Tạo file danh sách cho ffmpeg concat (dùng forward slash / để tương thích Windows)
         concat_txt = cdir / "concat.txt"
         with open(concat_txt, "w", encoding="utf-8") as f:
             for idx in range(total_chunks):
                 chunk_file = cdir / f"{CHUNK_PREFIX}{idx}.mp3"
-                if chunk_file.exists():
-                    f.write(f"file '{chunk_file.resolve()}'\n")
+                safe_path = str(chunk_file.resolve()).replace("\\", "/")
+                f.write(f"file '{safe_path}'\n")
 
         cmd = [ffmpeg_exe, "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat_txt), "-c", "copy", str(full_mp3_path)]
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, subprocess.run, cmd)
-        if full_mp3_path.exists():
+        if full_mp3_path.exists() and full_mp3_path.stat().st_size > 1024:
+            manifest = load_manifest(book_id, chapter_id)
+            manifest["is_complete"] = True
+            save_manifest(book_id, chapter_id, manifest)
             print(f"[Auto-Stitch] ✅ Đã ghép hoàn chỉnh MP3 cho {book_id}/{chapter_id} ({full_mp3_path.stat().st_size} bytes)")
+            return True
+        return False
     except Exception as e:
         print(f"[Auto-Stitch Error] {e}")
+        return False
 
 
 # ----------------------------------------------------------------
@@ -657,8 +669,47 @@ async def sync_upstream_seed_index():
 # Helper: Cào nội dung truyện web
 # ----------------------------------------------------------------
 
-def crawl_web_chapter_content(url: str) -> str:
-    """Cào toàn văn nội dung của 1 chương truyện web bằng BeautifulSoup."""
+def extract_clean_chapter_title_from_soup(soup, num: int = 0) -> str:
+    """Trích xuất tiêu đề chương sạch sẽ, bảo toàn subtitle đầy đủ và xóa dấu hai chấm thừa ở cuối."""
+    title_from_tag = ""
+    if soup.title and soup.title.string:
+        raw_tag = soup.title.string.strip()
+        m = re.search(r"((?:Chương|Hồi|Quyển)\s*\d+[^|\-–—<]+)", raw_tag, re.IGNORECASE)
+        if m:
+            title_from_tag = m.group(1).split("của truyện")[0].split("-")[0].split("|")[0].strip()
+        else:
+            title_from_tag = raw_tag.split("của truyện")[0].split("-")[0].split("|")[0].strip()
+
+    title_from_heading = ""
+    h_el = soup.select_one("h1, a.chapter-title, .chapter-title, .title-chap, h2")
+    if h_el:
+        title_from_heading = h_el.get_text(" ", strip=True)
+
+    clean_tag = re.sub(r"[:\s\-–—]+$", "", re.sub(r"\s+", " ", title_from_tag)).strip()
+    clean_heading = re.sub(r"[:\s\-–—]+$", "", re.sub(r"\s+", " ", title_from_heading)).strip()
+
+    # Kiểm tra xem tiêu đề có phải dạng generic không (vd: "Chương 7", "Chương 7:", "Chương 7 -")
+    generic_pattern = r"^(?:Chương|Hồi|Quyển)\s*\d+[:\s\-–—]*$"
+    is_heading_generic = not clean_heading or bool(re.match(generic_pattern, clean_heading, re.I))
+    is_tag_generic = not clean_tag or bool(re.match(generic_pattern, clean_tag, re.I))
+
+    if not is_tag_generic and is_heading_generic:
+        chosen = clean_tag
+    elif not is_heading_generic:
+        # Nếu heading có subtitle nhưng tag lại dài hơn/chi tiết hơn
+        chosen = clean_tag if (clean_tag and len(clean_tag) > len(clean_heading) + 3 and not is_tag_generic) else clean_heading
+    elif clean_tag:
+        chosen = clean_tag
+    elif clean_heading:
+        chosen = clean_heading
+    else:
+        chosen = f"Chương {num}" if num > 0 else "Chương mới"
+
+    return re.sub(r"[:\s\-–—]+$", "", chosen).strip()
+
+
+def crawl_web_chapter_content(url: str) -> Tuple[str, str]:
+    """Cào tiêu đề và toàn văn nội dung của 1 chương truyện web bằng BeautifulSoup."""
     try:
         from bs4 import BeautifulSoup
         req = urllib.request.Request(
@@ -670,33 +721,137 @@ def crawl_web_chapter_content(url: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
         soup = BeautifulSoup(html, "html.parser")
+
+        # Trích xuất số chương từ URL nếu có (vd: chuong-25.html)
+        num = 0
+        num_m = re.search(r"chuong-(\d+)", url)
+        if num_m:
+            num = int(num_m.group(1))
+
+        title = extract_clean_chapter_title_from_soup(soup, num)
+
         for tag in soup(["script", "style", "iframe", "ins", "noscript"]):
             tag.decompose()
         for ad in soup.select(".ads, .ad-container, .adsbygoogle, .banner, .box-ads"):
             ad.decompose()
         content_el = soup.select_one(".chapter-c, .reading-content, #chapter-c, .box-chap, .chapter-content, #chapter-content, .entry-content, div[itemprop='articleBody']")
-        if content_el:
-            return content_el.get_text("\n", strip=True)
+        content = content_el.get_text("\n", strip=True) if content_el else ""
+        return title, content
     except Exception as e:
         print(f"[Crawl Error] {e}")
-    return ""
+    return "", ""
+
+
+def fetch_single_chapter_title(url: str, num: int = 0) -> dict:
+    """Tải trang HTML để trích xuất tiêu đề chương (Title Crawl) với cơ chế retry và SSL an toàn."""
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+
+    last_err = ""
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            title = extract_clean_chapter_title_from_soup(soup, num)
+
+            if title and len(title) >= 3:
+                return {
+                    "chapter_number": num,
+                    "title": title,
+                    "url": url,
+                    "success": True,
+                }
+        except Exception as e:
+            last_err = str(e)
+            if attempt == 0:
+                time.sleep(0.4)
+
+    return {
+        "chapter_number": num,
+        "title": f"Chương {num}" if num > 0 else "Chương mới",
+        "url": url,
+        "success": False,
+        "error": last_err,
+    }
 
 
 @app.get("/api/crawl")
 def api_crawl(url: str = Query(..., description="URL chương truyện web")):
     """Endpoint API cào toàn văn chương truyện web cho App Client."""
-    content = crawl_web_chapter_content(url)
+    title, content = crawl_web_chapter_content(url)
     if not content:
         raise HTTPException(status_code=400, detail="Không thể cào nội dung từ URL này")
+    
+    # Trích xuất số chương từ URL nếu có (vd: chuong-25.html)
+    chap_num = 1
+    m = re.search(r"chuong-(\d+)", url)
+    if m:
+        chap_num = int(m.group(1))
+
     return {
         "status": "ok",
         "url": url,
         "content": content,
         "content_length": len(content),
         "story_title": "Truyện Web",
-        "chapter_title": "Chương mới",
-        "chapter_number": 1,
+        "chapter_title": title or f"Chương {chap_num}",
+        "chapter_number": chap_num,
         "author": "Tác giả Online",
+    }
+
+
+@app.get("/api/crawl_chapter_titles")
+def api_crawl_chapter_titles(
+    base_url: str = Query("", description="Base URL truyện hoặc pattern"),
+    urls: str = Query("", description="Danh sách URL phân tách bằng dấu phẩy"),
+    start: int = Query(1, description="Số chương bắt đầu"),
+    count: int = Query(10, description="Số lượng chương cần lấy"),
+):
+    """Endpoint cào song song tiêu đề nhiều chương liên tiếp với tốc độ cao."""
+    from concurrent.futures import ThreadPoolExecutor
+    items_to_fetch = []
+    if urls:
+        url_list = [u.strip() for u in urls.split(",") if u.strip()]
+        for idx, u in enumerate(url_list):
+            num_match = re.search(r"chuong-(\d+)", u)
+            num = int(num_match.group(1)) if num_match else (start + idx)
+            items_to_fetch.append((u, num))
+    elif base_url:
+        clean_base = base_url.rstrip("/")
+        for num in range(start, start + count):
+            if "wetruyen.com" in clean_base or "truyenfull" in clean_base:
+                slug = clean_base.split("/")[-1]
+                u = f"https://wetruyen.com/{slug}/chuong-{num}.html"
+            else:
+                u = f"{clean_base}/chuong-{num}/"
+            items_to_fetch.append((u, num))
+
+    results = []
+    max_workers = min(15, max(1, len(items_to_fetch)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(fetch_single_chapter_title, u, num) for u, num in items_to_fetch]
+        for f in futures:
+            try:
+                results.append(f.result())
+            except Exception:
+                pass
+
+    results.sort(key=lambda x: x["chapter_number"])
+    return {
+        "status": "ok",
+        "count": len(results),
+        "results": results
     }
 
 
@@ -790,9 +945,25 @@ async def stream_start(req: StreamStartRequest):
 
     session_id = f"sess_{int(time.time())}_{req.book_id}_{req.chapter_id}"
 
+    cdir = get_chapter_cache_dir(req.book_id, req.chapter_id)
     manifest = load_manifest(req.book_id, req.chapter_id)
     manifest["total_chunks"] = len(sentences)
     save_manifest(req.book_id, req.chapter_id, manifest)
+
+    # Lưu danh sách câu và voice vào cache phục vụ tải offline / download_full
+    try:
+        sentences_file = cdir / "sentences.json"
+        with open(sentences_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "sentences": sentences,
+                "voice": req.voice or DEFAULT_VOICE,
+                "book_id": req.book_id,
+                "chapter_id": req.chapter_id,
+                "url": req.url or "",
+                "total_chunks": len(sentences),
+            }, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Stream Start] Lỗi lưu sentences.json: {e}")
 
     _sessions[session_id] = {
         "book_id": req.book_id,
@@ -824,6 +995,18 @@ async def stream_start(req: StreamStartRequest):
                 req.voice or DEFAULT_VOICE,
             )
         )
+
+    # Đưa các chunk còn lại vào _backfill_queue để worker ngầm gen tiếp tục toàn bộ chương
+    completed_set = set(manifest.get("completed_chunks", []))
+    for idx in range(len(sentences)):
+        if idx not in completed_set and idx != start_idx and idx != (start_idx + 1):
+            _backfill_queue.put_nowait({
+                "book_id": req.book_id,
+                "chapter_id": req.chapter_id,
+                "chunk_idx": idx,
+                "text": sentences[idx],
+                "voice": req.voice or DEFAULT_VOICE,
+            })
 
     return {
         "session_id": session_id,
@@ -996,14 +1179,88 @@ async def batch_backfill(req: BackfillRequest):
 
 
 @app.get("/api/stream/download_full")
-def download_full_chapter(book_id: str, chapter_id: str):
-    """Tải toàn bộ file MP3 đã ghép của chương."""
+async def download_full_chapter(
+    book_id: str,
+    chapter_id: str,
+    url: Optional[str] = Query(None, description="URL truyện web"),
+    voice: Optional[str] = Query(None, description="Giọng đọc"),
+):
+    """
+    Tải toàn bộ file MP3 đã ghép trọn vẹn 100% của chương.
+    Nếu chưa gen xong, tự động tổng hợp tất cả các câu còn thiếu trước khi trả về.
+    Tuyệt đối không bao giờ trả về file ghép thiếu câu!
+    """
+    update_stream_activity()
     cdir = get_chapter_cache_dir(book_id, chapter_id)
     full_mp3 = cdir / "full_chapter.mp3"
+    manifest = load_manifest(book_id, chapter_id)
+
+    # Nếu đã có file hoàn chỉnh thật sự (đủ 100% chunks)
+    total_chunks = manifest.get("total_chunks", 0)
+    completed_chunks = set(manifest.get("completed_chunks", []))
+    if manifest.get("is_complete") and full_mp3.exists() and full_mp3.stat().st_size > 5000:
+        if total_chunks > 0 and len(completed_chunks) >= total_chunks:
+            with open(full_mp3, "rb") as f:
+                return Response(content=f.read(), media_type="audio/mpeg")
+
+    # Nếu full_mp3 tồn tại nhưng bị thiếu chunk do phiên bản cũ ghép dở -> xóa file lỗi
     if full_mp3.exists():
+        try:
+            full_mp3.unlink()
+        except Exception:
+            pass
+
+    # Lấy danh sách câu từ sentences.json
+    sentences = []
+    chosen_voice = voice or DEFAULT_VOICE
+    sentences_file = cdir / "sentences.json"
+    if sentences_file.exists():
+        try:
+            with open(sentences_file, "r", encoding="utf-8") as f:
+                sdata = json.load(f)
+                sentences = sdata.get("sentences", [])
+                if not voice and sdata.get("voice"):
+                    chosen_voice = sdata["voice"]
+        except Exception:
+            pass
+
+    # Nếu chưa có sentences.json nhưng client truyền url -> cào ngay
+    if not sentences and url:
+        _, content = crawl_web_chapter_content(url)
+        if content:
+            sentences = adaptive_split_sentences(content)
+            with open(sentences_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "sentences": sentences,
+                    "voice": chosen_voice,
+                    "book_id": book_id,
+                    "chapter_id": chapter_id,
+                    "url": url,
+                    "total_chunks": len(sentences),
+                }, f, ensure_ascii=False, indent=2)
+
+    if not sentences:
+        raise HTTPException(
+            status_code=404,
+            detail="Chương chưa có nội dung text để tạo file audio đầy đủ. Vui lòng mở nghe online một lần hoặc truyền url."
+        )
+
+    total_chunks = len(sentences)
+    manifest["total_chunks"] = total_chunks
+    save_manifest(book_id, chapter_id, manifest)
+
+    # Tổng hợp tất cả các câu còn thiếu (Single-flight coalesced)
+    for idx in range(total_chunks):
+        if not get_cached_chunk_mp3(book_id, chapter_id, idx):
+            await synthesize_chunk_coalesced(book_id, chapter_id, idx, sentences[idx], chosen_voice)
+
+    # Ghép toàn bộ các câu 0..total_chunks-1 thành full_chapter.mp3
+    success = await auto_stitch_full_chapter(book_id, chapter_id, total_chunks)
+    if success and full_mp3.exists():
         with open(full_mp3, "rb") as f:
             return Response(content=f.read(), media_type="audio/mpeg")
-    raise HTTPException(status_code=404, detail="Chương chưa được ghép hoàn chỉnh.")
+
+    raise HTTPException(status_code=500, detail="Không thể ghép file audio trọn vẹn của chương.")
 
 
 @app.get("/api/music/{name}")
