@@ -38,6 +38,9 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
   const [serverUrl, setServerUrl] = useState<string>(() => ttsService.getServerUrl());
   const [testingConnection, setTestingConnection] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<{ success?: boolean; message?: string } | null>(null);
+  const [tunnelMachines, setTunnelMachines] = useState<Array<{name: string; url: string; updated_at: string}>>([]);
+  const [loadingMachines, setLoadingMachines] = useState(false);
+  const [selectedMachine, setSelectedMachine] = useState<string | null>(null);
 
   const handleToggleSaveToDevice = async (value: boolean) => {
     setSaveToDevice(value);
@@ -64,6 +67,45 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
       setConnectionStatus({ success: false, message: 'Không thể kết nối tới máy chủ.' });
     } finally {
       setTestingConnection(false);
+    }
+  };
+
+  const loadTunnelMachines = async () => {
+    setLoadingMachines(true);
+    try {
+      const machines = await ttsService.getTunnelMachinesFromGist();
+      setTunnelMachines(machines);
+      // Đánh dấu máy đang dùng (khớp URL hiện tại)
+      const current = ttsService.getServerUrl();
+      const match = machines.find(m => m.url === current);
+      setSelectedMachine(match ? match.name : null);
+    } catch {
+      setTunnelMachines([]);
+    } finally {
+      setLoadingMachines(false);
+    }
+  };
+
+  const handleSelectMachine = async (name: string, url: string) => {
+    await ttsService.selectTunnelMachine(name, url);
+    setSelectedMachine(name);
+    setServerUrl(url);
+    setConnectionStatus({ success: true, message: `Đã chọn máy "${name}". Bấm "Lưu & Thử" để kiểm tra kết nối.` });
+  };
+
+  const formatMachineTime = (iso: string): string => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      const now = new Date();
+      const diffMin = Math.floor((now.getTime() - d.getTime()) / 60000);
+      if (diffMin < 1) return 'vừa xong';
+      if (diffMin < 60) return `${diffMin} phút trước`;
+      const diffH = Math.floor(diffMin / 60);
+      if (diffH < 24) return `${diffH} giờ trước`;
+      return d.toLocaleDateString('vi-VN');
+    } catch {
+      return '';
     }
   };
 
@@ -212,6 +254,52 @@ export const VoiceSelectorModal: React.FC<VoiceSelectorModalProps> = ({
                     {connectionStatus.message}
                   </Text>
                 </View>
+              )}
+
+              {/* Chọn máy tunnel từ Gist */}
+              <View style={styles.machineRow}>
+                <Text style={styles.machineLabel}>Hoặc chọn máy có sẵn:</Text>
+                <TouchableOpacity
+                  style={styles.machineRefreshBtn}
+                  onPress={loadTunnelMachines}
+                  disabled={loadingMachines}
+                >
+                  {loadingMachines ? (
+                    <ActivityIndicator size="small" color={Colors.primary} />
+                  ) : (
+                    <Ionicons name="refresh" size={18} color={Colors.primary} />
+                  )}
+                </TouchableOpacity>
+              </View>
+              {tunnelMachines.length > 0 ? (
+                tunnelMachines.map(m => (
+                  <TouchableOpacity
+                    key={m.name}
+                    style={[
+                      styles.machineBtn,
+                      selectedMachine === m.name && styles.machineBtnSelected,
+                    ]}
+                    onPress={() => handleSelectMachine(m.name, m.url)}
+                  >
+                    <Ionicons
+                      name={selectedMachine === m.name ? 'radio-button-on' : 'radio-button-off'}
+                      size={18}
+                      color={selectedMachine === m.name ? Colors.primary : Colors.textMuted}
+                    />
+                    <View style={styles.machineInfo}>
+                      <Text style={styles.machineName}>{m.name}</Text>
+                      {m.updated_at ? (
+                        <Text style={styles.machineTime}>{formatMachineTime(m.updated_at)}</Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                !loadingMachines && (
+                  <Text style={styles.machineEmpty}>
+                    Bấm nút refresh để tải danh sách máy từ Gist.
+                  </Text>
+                )
               )}
             </View>
 
@@ -458,6 +546,53 @@ const styles = StyleSheet.create({
   },
   statusBadgeTextError: {
     color: '#ef4444',
+  },
+  machineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  machineLabel: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  machineRefreshBtn: {
+    padding: 6,
+  },
+  machineBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 8,
+    gap: 10,
+  },
+  machineBtnSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primary + '10',
+  },
+  machineInfo: {
+    flex: 1,
+  },
+  machineName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  machineTime: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  machineEmpty: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    fontStyle: 'italic',
   },
   settingCard: {
     backgroundColor: Colors.surface,
